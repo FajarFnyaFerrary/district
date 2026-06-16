@@ -1,6 +1,7 @@
 --[[
     WindUI Remote Event Spy Example
     Script untuk monitor dan display semua Remote Event/Function calls
+    dengan search bar dan example script generation
 ]]
 
 local cloneref = (cloneref or clonereference or function(instance)
@@ -62,6 +63,8 @@ local SpyData = {
 	RemotesCaught = {}, -- Menyimpan remote yang tertangkap
 	IsSpying = true,
 	ScrollPosition = 0,
+	SearchQuery = "",
+	SelectedLog = nil,
 }
 
 -- ==================== UTILITY FUNCTIONS ====================
@@ -93,6 +96,65 @@ local function getArgumentString(args)
 	end
 
 	return table.concat(argStrings, ", ")
+end
+
+local function argumentToLua(arg)
+	local argType = typeof(arg)
+
+	if argType == "string" then
+		return '"' .. tostring(arg):gsub('"', '\\"') .. '"'
+	elseif argType == "number" then
+		return tostring(arg)
+	elseif argType == "boolean" then
+		return tostring(arg)
+	elseif argType == "Instance" then
+		return 'game:FindFirstChild("' .. arg.Name .. '")'
+	elseif argType == "table" then
+		local parts = {}
+		for i, v in ipairs(arg) do
+			table.insert(parts, argumentToLua(v))
+		end
+		return "{" .. table.concat(parts, ", ") .. "}"
+	else
+		return "nil"
+	end
+end
+
+local function generateExampleScript(log)
+	local remotePath = log.RemoteName
+
+	local script = '--[[ Generated from Remote Event Spy ]]\n'
+	script = script .. 'local remote = game:FindService("ReplicatedStorage"):FindFirstChild("' .. string.match(remotePath, "[^/]+$") .. '")\n'
+	script = script .. 'if remote then\n'
+
+	if log.RemoteType == "RemoteEvent" then
+		script = script .. '\tremote:FireServer('
+		if log.Arguments and #log.Arguments > 0 then
+			local argParts = {}
+			for _, arg in ipairs(log.Arguments) do
+				table.insert(argParts, argumentToLua(arg))
+			end
+			script = script .. table.concat(argParts, ", ")
+		end
+		script = script .. ')\n'
+	else
+		script = script .. '\tlocal result = remote:InvokeServer('
+		if log.Arguments and #log.Arguments > 0 then
+			local argParts = {}
+			for _, arg in ipairs(log.Arguments) do
+				table.insert(argParts, argumentToLua(arg))
+			end
+			script = script .. table.concat(argParts, ", ")
+		end
+		script = script .. ')\n'
+		script = script .. '\tprint("Result:", result)\n'
+	end
+
+	script = script .. 'else\n'
+	script = script .. '\tprint("Remote not found")\n'
+	script = script .. 'end\n'
+
+	return script
 end
 
 local function shouldTrackRemote(remoteName)
@@ -154,6 +216,25 @@ local function addLog(remoteType, remoteName, method, arguments)
 	SpyData.RemotesCaught[remoteName].LastCalled = os.time()
 end
 
+local function getFilteredLogs()
+	if SpyData.SearchQuery == "" then
+		return SpyData.Logs
+	end
+
+	local filtered = {}
+	local query = SpyData.SearchQuery:lower()
+
+	for _, log in ipairs(SpyData.Logs) do
+		if string.find(log.RemoteName:lower(), query, 1, true) or
+			string.find(log.ArgumentString:lower(), query, 1, true) or
+			string.find(log.Method:lower(), query, 1, true) then
+			table.insert(filtered, log)
+		end
+	end
+
+	return filtered
+end
+
 local function hookRemotes(parent)
 	if not parent then
 		return
@@ -209,9 +290,32 @@ local Tab3 = Window:Tab({
 	Icon = "solar:settings-bold",
 })
 
+local Tab4 = Window:Tab({
+	Title = "Script Details",
+	Icon = "solar:code-bold",
+})
+
 Tab1:Select()
 
 -- ==================== TAB 1: LIVE MONITOR ====================
+Tab1:Section({
+	Title = "Search & Filter",
+	Desc = "Cari remote events berdasarkan nama atau arguments",
+})
+
+Tab1:Space({ Columns = 1 })
+
+local SearchInput = Tab1:TextInput({
+	Title = "Search Remote",
+	PlaceHolder = "Ketik nama remote atau argument...",
+	Value = "",
+	Callback = function(value)
+		SpyData.SearchQuery = value
+	end,
+})
+
+Tab1:Space({ Columns = 1 })
+
 Tab1:Section({
 	Title = "Live Remote Calls",
 	Desc = "Monitor semua remote event/function yang dipanggil",
@@ -247,6 +351,7 @@ Group1:Button({
 	Icon = "solar:trash-bin-trash-bold",
 	Callback = function()
 		SpyData.Logs = {}
+		SpyData.SelectedLog = nil
 		WindUI:Notify({
 			Title = "Cleared",
 			Content = "Semua logs telah dihapus",
@@ -257,14 +362,59 @@ Group1:Button({
 Tab1:Space({ Columns = 1 })
 
 Tab1:Section({
-	Title = "Logs (" .. #SpyData.Logs .. ")",
-	Desc = "Daftar remote calls terbaru",
+	Title = "Logs",
+	Desc = "Klik untuk melihat example script",
 })
 
-local LogText = Tab1:Paragraph({
-	Title = "Remote Calls Log",
-	Content = "Menunggu remote call...",
-})
+local LogButtonsHolder = {}
+local LogContainer = Tab1:Group()
+
+local function updateLogDisplay()
+	-- Clear previous buttons
+	LogButtonsHolder = {}
+
+	local filteredLogs = getFilteredLogs()
+
+	if #filteredLogs == 0 then
+		local emptyText = Tab1:Paragraph({
+			Title = "No Logs",
+			Content = "Belum ada remote calls yang tertangkap atau hasil search kosong",
+		})
+		return
+	end
+
+	for i = 1, math.min(20, #filteredLogs) do
+		local log = filteredLogs[i]
+		local timeStr = os.date("%H:%M:%S", log.Timestamp)
+		local icon = log.RemoteType == "RemoteEvent" and "🔴" or "🔵"
+
+		local buttonText = icon
+			.. " ["
+			.. timeStr
+			.. "] "
+			.. log.Method
+			.. "\n"
+			.. log.RemoteName:sub(1, 60)
+			.. "\n"
+			.. log.ArgumentString:sub(1, 70)
+
+		LogButtonsHolder[i] = LogContainer:Button({
+			Title = buttonText,
+			Justify = "Left",
+			Size = "Small",
+			Callback = function()
+				SpyData.SelectedLog = log
+				Tab4:Select()
+			end,
+		})
+	end
+
+	-- Update header dengan jumlah results
+	Tab1:Section({
+		Title = "Results: " .. #filteredLogs .. " / " .. #SpyData.Logs,
+		Desc = "Klik salah satu untuk lihat example script",
+	})
+end
 
 -- Update logs secara real-time
 local lastUpdateTime = 0
@@ -274,33 +424,11 @@ RunService.RenderStepped:Connect(function()
 	end
 	lastUpdateTime = os.time()
 
-	if not SpyData.IsSpying or #SpyData.Logs == 0 then
+	if not SpyData.IsSpying then
 		return
 	end
 
-	local logContent = ""
-
-	for i = 1, math.min(15, #SpyData.Logs) do
-		local log = SpyData.Logs[i]
-		local timeStr = os.date("%H:%M:%S", log.Timestamp)
-		local icon = log.RemoteType == "RemoteEvent" and "🔴" or "🔵"
-
-		logContent = logContent
-			.. icon
-			.. " ["
-			.. timeStr
-			.. "] "
-			.. log.Method
-			.. "\n"
-			.. "   Remote: "
-			.. log.RemoteName:sub(1, 60)
-			.. "\n"
-			.. "   Args: "
-			.. log.ArgumentString:sub(1, 80)
-			.. "\n\n"
-	end
-
-	LogText:SetContent(logContent)
+	updateLogDisplay()
 end)
 
 -- ==================== TAB 2: STATISTICS ====================
@@ -321,10 +449,12 @@ RunService.RenderStepped:Connect(function()
 		return
 	end
 
-	local statsContent = "Total Remote Calls: " .. #SpyData.Logs .. "\n"
-	statsContent = statsContent .. "Unique Remotes: " .. getmetatable(SpyData.RemotesCaught) == nil and "0"
-		or tostring(#SpyData.RemotesCaught)
-	statsContent = statsContent .. "\n\n"
+	local statsContent = "📊 Total Remote Calls: " .. #SpyData.Logs .. "\n"
+	local uniqueCount = 0
+	for _ in pairs(SpyData.RemotesCaught) do
+		uniqueCount = uniqueCount + 1
+	end
+	statsContent = statsContent .. "🎯 Unique Remotes: " .. uniqueCount .. "\n\n"
 
 	statsContent = statsContent .. "Top Called Remotes:\n"
 
@@ -416,6 +546,149 @@ Group3:Button({
 		})
 	end,
 })
+
+-- ==================== TAB 4: SCRIPT DETAILS ====================
+Tab4:Section({
+	Title = "Remote Details",
+	Desc = "Lihat dan copy example script dari remote yang dipilih",
+})
+
+Tab4:Space({ Columns = 1 })
+
+local ScriptDetailsText = Tab4:Paragraph({
+	Title = "No Remote Selected",
+	Content = "Pilih remote dari Live Monitor tab untuk melihat details dan example script",
+})
+
+local ScriptCodeText = Tab4:Paragraph({
+	Title = "Example Script",
+	Content = "Generated script akan muncul di sini",
+})
+
+local Group4 = Tab4:Group()
+
+Group4:Button({
+	Title = "Copy Script",
+	Icon = "solar:copy-bold",
+	Size = "Small",
+	Callback = function()
+		if not SpyData.SelectedLog then
+			WindUI:Notify({
+				Title = "Error",
+				Content = "Belum ada remote yang dipilih",
+			})
+			return
+		end
+
+		local script = generateExampleScript(SpyData.SelectedLog)
+
+		-- Copy to clipboard (requires setclipboard)
+		if setclipboard then
+			setclipboard(script)
+			WindUI:Notify({
+				Title = "Copied!",
+				Content = "Script telah dicopy ke clipboard",
+			})
+		else
+			WindUI:Notify({
+				Title = "Error",
+				Content = "setclipboard tidak tersedia",
+			})
+		end
+	end,
+})
+
+Group4:Space({ Columns = 0.5 })
+
+Group4:Button({
+	Title = "Run Script",
+	Icon = "solar:play-bold",
+	Size = "Small",
+	Callback = function()
+		if not SpyData.SelectedLog then
+			WindUI:Notify({
+				Title = "Error",
+				Content = "Belum ada remote yang dipilih",
+			})
+			return
+		end
+
+		local script = generateExampleScript(SpyData.SelectedLog)
+
+		-- Run the script
+		local success, result = pcall(function()
+			return loadstring(script)()
+		end)
+
+		if success then
+			WindUI:Notify({
+				Title = "Executed",
+				Content = "Script telah dijalankan",
+			})
+		else
+			WindUI:Notify({
+				Title = "Error",
+				Content = "Gagal menjalankan script: " .. tostring(result),
+			})
+		end
+	end,
+})
+
+Group4:Space({ Columns = 0.5 })
+
+Group4:Button({
+	Title = "Load as String",
+	Icon = "solar:download-square-bold",
+	Size = "Small",
+	Callback = function()
+		if not SpyData.SelectedLog then
+			WindUI:Notify({
+				Title = "Error",
+				Content = "Belum ada remote yang dipilih",
+			})
+			return
+		end
+
+		local script = generateExampleScript(SpyData.SelectedLog)
+
+		-- Try to load the script and store result
+		local func, err = loadstring(script)
+		if func then
+			_G.LastGeneratedScript = func
+			WindUI:Notify({
+				Title = "Loaded",
+				Content = "Script loaded di _G.LastGeneratedScript",
+			})
+		else
+			WindUI:Notify({
+				Title = "Error",
+				Content = "Gagal load script: " .. tostring(err),
+			})
+		end
+	end,
+})
+
+-- Update script details display
+RunService.RenderStepped:Connect(function()
+	if not SpyData.SelectedLog then
+		return
+	end
+
+	local log = SpyData.SelectedLog
+	local details = "📋 Remote Information\n"
+	details = details .. "━━━━━━━━━━━━━━━━━━━━━\n"
+	details = details .. "Type: " .. log.RemoteType .. "\n"
+	details = details .. "Method: " .. log.Method .. "\n"
+	details = details .. "Time: " .. os.date("%Y-%m-%d %H:%M:%S", log.Timestamp) .. "\n"
+	details = details .. "Full Path: " .. log.RemoteName .. "\n\n"
+	details = details .. "Arguments Count: " .. (log.Arguments and #log.Arguments or 0) .. "\n"
+	details = details .. "Arguments: " .. log.ArgumentString
+
+	ScriptDetailsText:SetContent(details)
+
+	local generatedScript = generateExampleScript(log)
+	ScriptCodeText:SetContent("```lua\n" .. generatedScript .. "\n```")
+end)
 
 -- ==================== INITIALIZATION ====================
 -- Hook semua remotes saat startup
