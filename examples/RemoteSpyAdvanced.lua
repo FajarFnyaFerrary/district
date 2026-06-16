@@ -634,9 +634,9 @@ function KillerModule.PredictNextKiller()
 end
 
 -- ===== VISUALS MODULE (FIXED) =====
+-- ===== VISUALS MODULE (FIXED WORLD ESP & CLEAN HIGHLIGHT) =====
 local VisualsModule = {}
 
--- FIX & UPDATE: Fungsi ESP Highlight Player Utama
 function VisualsModule.PlayerESPHighlight()
 	if not Config.Visuals.PlayerHighlight then
 		DestroyAllHighlights()
@@ -647,23 +647,55 @@ function VisualsModule.PlayerESPHighlight()
 		for _, player in ipairs(Players:GetPlayers()) do
 			if player ~= LocalPlayer and player.Character then
 				local char = player.Character
-				
-				-- FIXED: Pasang Highlight langsung ke MODEL karakter agar seluruh tubuh menyala tembus pandang
 				local existingHighlight = char:FindFirstChild("PlayerHighlight")
 				if not existingHighlight then
-					-- Logika deteksi role dinamis (biar gak selamanya dianggap survivor)
 					local isKiller = false
 					if char:FindFirstChild("Killer") or player:FindFirstChild("Role") or char:GetAttribute("Role") == "Killer" or char.Name:lower():match("killer") then
 						isKiller = true
 					end
-					
 					local color = isKiller and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 255, 0)
-					local label = player.Name .. " [" .. (isKiller and "KILLER" or "SURVIVOR") .. "]"
+					CreateHighlightBox(char, color, isKiller)
+				end
+			end
+		end
+	end)
+end
+
+-- Generic Handler untuk World ESP agar otomatis bersih saat OFF
+local function HandleWorldESP(configState, folderName, espName, color, text)
+	if not configState then
+		for _, obj in ipairs(Workspace:GetDescendants()) do
+			if obj.Name == espName then
+				obj:Destroy()
+			end
+		end
+		return
+	end
+	
+	pcall(function()
+		local folder = Workspace:FindFirstChild(folderName, true)
+		if folder then
+			for _, item in ipairs(folder:GetChildren()) do
+				if item and not item:FindFirstChild(espName) then
+					local billboard = Instance.new("BillboardGui")
+					billboard.MaxDistance = 600
+					billboard.Size = UDim2.new(5, 0, 1.5, 0)
+					billboard.StudsOffset = Vector3.new(0, 4, 0)
+					billboard.AlwaysOnTop = true
+					billboard.Parent = item
+					billboard.Name = espName
 					
-					local highlight = CreateHighlightBox(char, color, label, isKiller)
-					if highlight then
-						table.insert(activeHighlights, highlight)
-					end
+					local textLabel = Instance.new("TextLabel")
+					textLabel.BackgroundColor3 = color
+					textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+					textLabel.TextSize = 11
+					textLabel.Size = UDim2.new(1, 0, 1, 0)
+					textLabel.Font = Enum.Font.SourceSansBold
+					textLabel.Parent = billboard
+					textLabel.Text = text
+					textLabel.BackgroundTransparency = 0.3
+					
+					table.insert(activeESPs, billboard)
 				end
 			end
 		end
@@ -671,199 +703,25 @@ function VisualsModule.PlayerESPHighlight()
 end
 
 function VisualsModule.GeneratorESP()
-	if not Config.Visuals.GeneratorESP then
-		return
-	end
-	
-	pcall(function()
-		local generators = GetAllGenerators()
-		for _, gen in ipairs(generators) do
-			if gen and not gen:FindFirstChild("GeneratorESP") then
-				local billboard = Instance.new("BillboardGui")
-				billboard.MaxDistance = 500
-				billboard.Size = UDim2.new(6, 0, 2, 0)
-				billboard.StudsOffset = Vector3.new(0, 5, 0)
-				billboard.AlwaysOnTop = true
-				billboard.Parent = gen
-				billboard.Name = "GeneratorESP"
-				
-				local textLabel = Instance.new("TextLabel")
-				textLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
-				textLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
-				textLabel.TextSize = 14
-				textLabel.Size = UDim2.new(1, 0, 1, 0)
-				textLabel.Parent = billboard
-				textLabel.Text = "GENERATOR [0%]"
-				textLabel.BackgroundTransparency = 0.3
-				
-				table.insert(activeESPs, billboard)
-			end
-		end
-	end)
+	HandleWorldESP(Config.Visuals.GeneratorESP, "Generators", "GenESP", Color3.fromRGB(255, 215, 0), "GENERATOR")
 end
 
 function VisualsModule.PalletESP()
-	if not Config.Visuals.PalletESP then return end
-	
-	pcall(function()
-		local pallets = FindInstance("Map/Pallets")
-		if pallets then
-			for _, pallet in ipairs(pallets:GetChildren()) do
-				if pallet and not pallet:FindFirstChild("PalletESP") then
-					local billboard = Instance.new("BillboardGui")
-					billboard.MaxDistance = 500
-					billboard.Size = UDim2.new(4, 0, 2, 0)
-					billboard.StudsOffset = Vector3.new(0, 3, 0)
-					billboard.AlwaysOnTop = true
-					billboard.Parent = pallet
-					billboard.Name = "PalletESP"
-					
-					local textLabel = Instance.new("TextLabel")
-					textLabel.BackgroundColor3 = Color3.fromRGB(165, 42, 42)
-					textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-					textLabel.TextSize = 12
-					textLabel.Size = UDim2.new(1, 0, 1, 0)
-					textLabel.Parent = billboard
-					textLabel.Text = "PALLET"
-					textLabel.BackgroundTransparency = 0.3
-					
-					table.insert(activeESPs, billboard)
-				end
-			end
-		end
-	end)
+	HandleWorldESP(Config.Visuals.PalletESP, "Pallets", "PalletESP", Color3.fromRGB(139, 69, 19), "PALLET")
 end
 
 function VisualsModule.ExitGateESP()
-	if not Config.Visuals.ExitGateESP then return end
-	
-	pcall(function()
-		local exitGates = FindInstance("Map/ExitGates")
-		if exitGates then
-			for _, gate in ipairs(exitGates:GetChildren()) do
-				if gate and not gate:FindFirstChild("ExitGateESP") then
-					local billboard = Instance.new("BillboardGui")
-					billboard.MaxDistance = 500
-					billboard.Size = UDim2.new(6, 0, 2, 0)
-					billboard.StudsOffset = Vector3.new(0, 5, 0)
-					billboard.AlwaysOnTop = true
-					billboard.Parent = gate
-					billboard.Name = "ExitGateESP"
-					
-					local textLabel = Instance.new("TextLabel")
-					textLabel.BackgroundColor3 = Color3.fromRGB(0, 255, 255)
-					textLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
-					textLabel.TextSize = 14
-					textLabel.Size = UDim2.new(1, 0, 1, 0)
-					textLabel.Parent = billboard
-					textLabel.Text = "EXIT GATE"
-					textLabel.BackgroundTransparency = 0.3
-					
-					table.insert(activeESPs, billboard)
-				end
-			end
-		end
-	end)
+	HandleWorldESP(Config.Visuals.ExitGateESP, "ExitGates", "GateESP", Color3.fromRGB(0, 255, 255), "EXIT GATE")
 end
 
 function VisualsModule.HookESP()
-	if not Config.Visuals.HookESP then return end
-	
-	pcall(function()
-		local hooks = FindInstance("Map/Hooks")
-		if hooks then
-			for _, hook in ipairs(hooks:GetChildren()) do
-				if hook and not hook:FindFirstChild("HookESP") then
-					local billboard = Instance.new("BillboardGui")
-					billboard.MaxDistance = 500
-					billboard.Size = UDim2.new(4, 0, 2, 0)
-					billboard.StudsOffset = Vector3.new(0, 3, 0)
-					billboard.AlwaysOnTop = true
-					billboard.Parent = hook
-					billboard.Name = "HookESP"
-					
-					local textLabel = Instance.new("TextLabel")
-					textLabel.BackgroundColor3 = Color3.fromRGB(255, 0, 255)
-					textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-					textLabel.TextSize = 12
-					textLabel.Size = UDim2.new(1, 0, 1, 0)
-					textLabel.Parent = billboard
-					textLabel.Text = "HOOK"
-					textLabel.BackgroundTransparency = 0.3
-					
-					table.insert(activeESPs, billboard)
-				end
-			end
-		end
-	end)
-end
-
-function VisualsModule.HealthESP()
-	if not Config.Visuals.HealthESP then return end
-	
-	pcall(function()
-		for _, player in ipairs(Players:GetPlayers()) do
-			if player ~= LocalPlayer and player.Character then
-				local humanoid = player.Character:FindFirstChild("Humanoid")
-				if humanoid then
-					local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
-					if rootPart and not rootPart:FindFirstChild("HealthESP") then
-						local billboard = Instance.new("BillboardGui")
-						billboard.MaxDistance = 300
-						billboard.Size = UDim2.new(6, 0, 1.5, 0)
-						billboard.StudsOffset = Vector3.new(0, 6, 0)
-						billboard.AlwaysOnTop = true
-						billboard.Parent = rootPart
-						billboard.Name = "HealthESP"
-						
-						local textLabel = Instance.new("TextLabel")
-						textLabel.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-						textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-						textLabel.TextSize = 12
-						textLabel.Size = UDim2.new(1, 0, 1, 0)
-						textLabel.Parent = billboard
-						textLabel.Text = "HP: " .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
-						textLabel.BackgroundTransparency = 0.4
-						
-						table.insert(activeESPs, billboard)
-					end
-				end
-			end
-		end
-	end)
+	HandleWorldESP(Config.Visuals.HookESP, "Hooks", "HookESP", Color3.fromRGB(255, 0, 255), "HOOK")
 end
 
 function VisualsModule.WindowESP()
-	if not Config.Visuals.WindowESP then return end
-	
-	pcall(function()
-		local windows = FindInstance("Map/Windows")
-		if windows then
-			for _, window in ipairs(windows:GetChildren()) do
-				if window and not window:FindFirstChild("WindowESP") then
-					local billboard = Instance.new("BillboardGui")
-					billboard.MaxDistance = 500
-					billboard.Size = UDim2.new(4, 0, 2, 0)
-					billboard.StudsOffset = Vector3.new(0, 3, 0)
-					billboard.AlwaysOnTop = true
-					billboard.Parent = window
-					billboard.Name = "WindowESP"
-					
-					local textLabel = Instance.new("TextLabel")
-					textLabel.BackgroundColor3 = Color3.fromRGB(100, 149, 237)
-					textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-					textLabel.TextSize = 12
-					textLabel.Size = UDim2.new(1, 0, 1, 0)
-					textLabel.Parent = billboard
-					textLabel.Text = "WINDOW"
-					textLabel.BackgroundTransparency = 0.3
-					
-					table.insert(activeESPs, billboard)
-				end
-			end
-		end
-	end)
+	HandleWorldESP(Config.Visuals.WindowESP, "Windows", "WinESP", Color3.fromRGB(70, 130, 180), "WINDOW")
 end
+
 
 function VisualsModule.CustomFOV()
 	if not Config.Visuals.CustomFOV then
@@ -1247,7 +1105,6 @@ local function MainLoop()
 			SafePcall(KillerModule.DoubleDamageGen)
 			SafePcall(KillerModule.KillerPower)
 			SafePcall(KillerModule.Teleport)
-			SafePcall(KillerModule.PredictNextKiller)
 			
 			-- Visuals
 			SafePcall(VisualsModule.PlayerESPHighlight)
@@ -1279,9 +1136,9 @@ end
 
 -- ===== WINDUI SETUP =====
 local Window = WindUI:CreateWindow({
-	Title = "Violence District Hub v3.2",
+	Title = "Violence District Hub v3.3",
 	Author = "by Jackson Storm",
-	Icon = "solar:gamepad-bold",
+	Icon = "rbxassetid://91993721465164",
 	Theme = Config.Theme,
 	NewElements = true,
 	Transparent = true,
@@ -1684,9 +1541,10 @@ TabVisuals:Toggle({
 
 -- ===== COMBAT TAB =====
 local TabCombat = Window:Tab({
-	Title = "⚔️ COMBAT",
+	Title = "COMBAT",
 	Icon = "solar:sword-bold",
 })
+
 
 TabCombat:Section({ Title = "Targeting System" })
 
@@ -1778,7 +1636,7 @@ local TabAuto = Window:Tab({
 TabAuto:Section({ Title = "Generator Automation" })
 
 TabAuto:Toggle({
-	Title = "Auto Generator ★",
+	Title = "Auto Generator",
 	Value = Config.Automation.AutoGenerator,
 	Callback = function(v)
 		Config.Automation.AutoGenerator = v
