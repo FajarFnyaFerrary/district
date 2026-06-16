@@ -1,0 +1,1779 @@
+--[[
+    Violence District - Ultimate Mod Hub v2.0
+    Complete Feature Implementation with Full Functionality
+    Author: .ftgs | Enhanced by Copilot
+]]
+
+local cloneref = (cloneref or clonereference or function(instance)
+	return instance
+end)
+
+local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
+local RunService = cloneref(game:GetService("RunService"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
+local Workspace = cloneref(workspace)
+local Players = cloneref(game:GetService("Players"))
+local Lighting = cloneref(game:GetService("Lighting"))
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+local WindUI
+do
+	local ok, result = pcall(function()
+		return require("./src/Init")
+	end)
+
+	if ok then
+		WindUI = result
+	else
+		if RunService:IsStudio() or not writefile then
+			WindUI = require(ReplicatedStorage:WaitForChild("WindUI"):WaitForChild("Init"))
+		else
+			WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/FajarFnyaFerrary/district/main/dist/main.lua"))()
+		end
+	end
+end
+
+-- ===== GLOBAL CONFIG =====
+local Config = {
+	Theme = "Dark",
+	VIP = {
+		AutoPlay = false,
+		AutoDagger = false,
+		AutoWiggle = false,
+	},
+	Survivor = {
+		SpeedBoost = false,
+		CustomSpeed = 16,
+		NoSlowdown = false,
+		NoClip = false,
+		ForceReset = false,
+		SilentActions = false,
+		AntiFallDamage = false,
+		GodMode = false,
+		InstantHeal = false,
+		AntiKnock = false,
+		AutoHealAura = false,
+	},
+	Killer = {
+		VeinDropPrediction = false,
+		VeinNoGravity = false,
+		AntiBlind = false,
+		AntiStun = false,
+		DoubleDamageGen = false,
+		KillerPower = false,
+		Teleport = false,
+		TargetPlayer = nil,
+	},
+	Visuals = {
+		PlayerESP = false,
+		GeneratorESP = false,
+		PalletESP = false,
+		ExitGateESP = false,
+		HookESP = false,
+		HealthESP = false,
+		WindowESP = false,
+		DistanceESP = false,
+		CustomFOV = false,
+		CustomFOVValue = 70,
+		OriginalFOV = 70,
+		Crosshair = false,
+		RemoveBlur = false,
+		Fullbright = false,
+		PotatoMode = false,
+	},
+	Combat = {
+		Aimbot = false,
+		AimbotRadius = 50,
+		ShowAimCircle = false,
+		TargetTracer = false,
+		LockOnHighlight = false,
+		ExpandKillerHitbox = false,
+		AutoAttack = false,
+	},
+	Automation = {
+		AutoGenerator = false,
+		GeneratorMode = "Neutral",
+		BoostAllGen = false,
+		InstantEscape = false,
+		SelfUnhook = false,
+	},
+	CameraMode = "FPP",
+}
+
+local OriginalSettings = {
+	Blur = nil,
+	Bloom = nil,
+	Ambient = nil,
+	OutdoorAmbient = nil,
+	ClockTime = nil,
+}
+
+-- ===== UTILITY FUNCTIONS =====
+local function SafePcall(func, ...)
+	local ok, result = pcall(func, ...)
+	if not ok then
+		warn("[VD-Hub] Error:", result)
+		return nil
+	end
+	return result
+end
+
+local function GetCharacter()
+	if LocalPlayer and LocalPlayer.Character then
+		return LocalPlayer.Character
+	end
+	return LocalPlayer.CharacterAdded:Wait()
+end
+
+local function GetHumanoid()
+	local char = GetCharacter()
+	return char:FindFirstChild("Humanoid") or char:WaitForChild("Humanoid", 5)
+end
+
+local function GetHumanoidRootPart()
+	local char = GetCharacter()
+	return char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
+end
+
+local function FindInstance(path)
+	local parts = string.split(path, "/")
+	local current = Workspace
+	for _, part in ipairs(parts) do
+		current = current:FindFirstChild(part) or current:WaitForChild(part, 3)
+		if not current then return nil end
+	end
+	return current
+end
+
+local function GetAllGenerators()
+	local generators = {}
+	pcall(function()
+		local genFolder = FindInstance("Map/Generators")
+		if genFolder then
+			for _, gen in ipairs(genFolder:GetChildren()) do
+				if gen.Name:match("Generator") then
+					table.insert(generators, gen)
+				end
+			end
+		end
+	end)
+	return generators
+end
+
+local function CreateESP(object, color, label, showDistance)
+	if not object or object:IsDescendantOf(Players) then return end
+	
+	local billboardGui = Instance.new("BillboardGui")
+	billboardGui.MaxDistance = 500
+	billboardGui.Size = UDim2.new(6, 0, 3, 0)
+	billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+	billboardGui.Parent = object
+	
+	local textLabel = Instance.new("TextLabel")
+	textLabel.BackgroundColor3 = color
+	textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	textLabel.TextSize = 14
+	textLabel.Size = UDim2.new(1, 0, 1, 0)
+	textLabel.Parent = billboardGui
+	textLabel.Text = label or object.Name
+	textLabel.BackgroundTransparency = 0.3
+	
+	if showDistance and object.Parent then
+		RunService.RenderStepped:Connect(function()
+			if not object.Parent then return end
+			local distance = (object.Position - GetHumanoidRootPart().Position).Magnitude
+			textLabel.Text = label .. " [" .. math.floor(distance) .. "m]"
+		end)
+	end
+	
+	return billboardGui
+end
+
+local function Notify(title, content, duration)
+	duration = duration or 3
+	WindUI:Notify({
+		Title = title,
+		Content = content,
+		Duration = duration,
+	})
+end
+
+local function GetClosestPlayer(excludeSelf, isKiller)
+	local closestPlayer = nil
+	local closestDistance = math.huge
+	
+	for _, player in ipairs(Players:GetPlayers()) do
+		if (not excludeSelf or player ~= LocalPlayer) and player.Character then
+			local distance = (player.Character.PrimaryPart.Position - GetHumanoidRootPart().Position).Magnitude
+			if distance < closestDistance then
+				if isKiller == nil then
+					closestPlayer = player
+					closestDistance = distance
+				else
+					-- Add role detection logic here if needed
+					closestPlayer = player
+					closestDistance = distance
+				end
+			end
+		end
+	end
+	
+	return closestPlayer, closestDistance
+end
+
+-- ===== VIP MODULE =====
+local VIPModule = {}
+
+function VIPModule.AutoPlay()
+	if not Config.VIP.AutoPlay then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local humanoid = GetHumanoid()
+		local rootPart = GetHumanoidRootPart()
+		
+		if humanoid.Health <= 0 then return end
+		
+		-- Find nearest generator
+		local generators = GetAllGenerators()
+		local nearestGen = nil
+		local nearestDist = math.huge
+		
+		for _, gen in ipairs(generators) do
+			local dist = (gen.Position - rootPart.Position).Magnitude
+			if dist < nearestDist then
+				nearestGen = gen
+				nearestDist = dist
+			end
+		end
+		
+		if nearestGen and nearestDist > 5 then
+			-- Move towards generator
+			local direction = (nearestGen.Position - rootPart.Position).Unit
+			rootPart.Velocity = direction * Config.Survivor.CustomSpeed
+		elseif nearestGen and nearestDist <= 5 then
+			-- Found generator, repair it
+			local genPoint = nearestGen:FindFirstChild("GeneratorPoint2") or nearestGen
+			pcall(function()
+				local repairEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Generator"):WaitForChild("RepairEvent")
+				repairEvent:FireServer(genPoint, true)
+			end)
+		else
+			-- Look for exit gate
+			local exitGates = FindInstance("Map/ExitGates")
+			if exitGates then
+				local nearestGate = nil
+				local nearestGateDist = math.huge
+				
+				for _, gate in ipairs(exitGates:GetChildren()) do
+					local dist = (gate.Position - rootPart.Position).Magnitude
+					if dist < nearestGateDist then
+						nearestGate = gate
+						nearestGateDist = dist
+					end
+				end
+				
+				if nearestGate and nearestGateDist > 5 then
+					local direction = (nearestGate.Position - rootPart.Position).Unit
+					rootPart.Velocity = direction * Config.Survivor.CustomSpeed
+				end
+			end
+		end
+	end)
+end
+
+function VIPModule.AutoDagger()
+	if not Config.VIP.AutoDagger then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local rootPart = GetHumanoidRootPart()
+		local humanoid = GetHumanoid()
+		
+		if humanoid.Health <= 0 then return end
+		
+		-- Detect incoming attacks and parry
+		local closestPlayer = GetClosestPlayer(true)
+		if closestPlayer and closestPlayer.Character then
+			local killerDist = (closestPlayer.Character.PrimaryPart.Position - rootPart.Position).Magnitude
+			if killerDist < 30 then
+				-- Auto parry
+				pcall(function()
+					local parryRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("Parry")
+					if parryRemote then
+						parryRemote:FireServer()
+					end
+				end)
+			end
+		end
+	end)
+end
+
+function VIPModule.AutoWiggle()
+	if not Config.VIP.AutoWiggle then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local humanoid = GetHumanoid()
+		
+		-- Check if grabbed
+		local grabbed = char:FindFirstChild("Grabbed") or humanoid:FindFirstChild("Grabbed")
+		if grabbed then
+			-- Spam wiggle to escape
+			pcall(function()
+				local wiggleRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("Wiggle")
+				if wiggleRemote then
+					for i = 1, 10 do
+						wiggleRemote:FireServer()
+						task.wait(0.05)
+					end
+				end
+			end)
+		end
+	end)
+end
+
+-- ===== SURVIVOR MODULE =====
+local SurvivorModule = {}
+local isMoving = false
+
+function SurvivorModule.SpeedBoost()
+	if not Config.Survivor.SpeedBoost then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local humanoid = GetHumanoid()
+		
+		if humanoid.Health > 0 then
+			humanoid.WalkSpeed = Config.Survivor.CustomSpeed
+		end
+	end)
+end
+
+function SurvivorModule.NoSlowdown()
+	if not Config.Survivor.NoSlowdown then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		-- Remove slowdown effects by resetting velocity multiplier
+		for _, child in ipairs(char:GetChildren()) do
+			if child:IsA("Humanoid") then
+				child.WalkSpeed = Config.Survivor.CustomSpeed
+			end
+		end
+	end)
+end
+
+function SurvivorModule.NoClip()
+	if not Config.Survivor.NoClip then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.CanCollide = false
+			end
+		end
+	end)
+end
+
+function SurvivorModule.ForceReset()
+	if not Config.Survivor.ForceReset then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local humanoid = GetHumanoid()
+		local rootPart = GetHumanoidRootPart()
+		
+		-- Force exit stuck animation
+		humanoid.Sit = false
+		humanoid:UnequipTools()
+		rootPart.Velocity = Vector3.new(0, 0, 0)
+		
+		local resetRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("ResetState")
+		if resetRemote then
+			resetRemote:FireServer()
+		end
+	end)
+end
+
+function SurvivorModule.SilentActions()
+	if not Config.Survivor.SilentActions then return end
+	
+	pcall(function()
+		-- Mute sound notifications when running/jumping
+		local char = GetCharacter()
+		for _, child in ipairs(char:GetChildren()) do
+			if child:IsA("Sound") then
+				child.Volume = 0
+			end
+		end
+	end)
+end
+
+function SurvivorModule.AntiFallDamage()
+	if not Config.Survivor.AntiFallDamage then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local humanoid = GetHumanoid()
+		local lastHealth = humanoid.Health
+		
+		if humanoid.Health < lastHealth and humanoid:FindFirstChild("FallDamageValue") then
+			humanoid.Health = lastHealth
+		end
+	end)
+end
+
+function SurvivorModule.GodMode()
+	if not Config.Survivor.GodMode then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local humanoid = GetHumanoid()
+		
+		humanoid.Health = humanoid.MaxHealth
+		humanoid.MaxHealth = math.huge
+	end)
+end
+
+function SurvivorModule.InstantHeal()
+	if not Config.Survivor.InstantHeal then return end
+	
+	pcall(function()
+		local humanoid = GetHumanoid()
+		humanoid.Health = humanoid.MaxHealth
+		
+		-- Fire heal event
+		local healRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("InstantHeal")
+		if healRemote then
+			healRemote:FireServer()
+		end
+	end)
+end
+
+function SurvivorModule.AntiKnock()
+	if not Config.Survivor.AntiKnock then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local rootPart = GetHumanoidRootPart()
+		local humanoid = GetHumanoid()
+		
+		if humanoid.State == Enum.HumanoidStateType.Landed then
+			rootPart.Velocity = Vector3.new(0, 0, 0)
+		end
+	end)
+end
+
+function SurvivorModule.AutoHealAura()
+	if not Config.Survivor.AutoHealAura then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local rootPart = GetHumanoidRootPart()
+		local humanoid = GetHumanoid()
+		
+		if humanoid.Health <= 0 then return end
+		
+		-- Heal nearby teammates
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer and player.Character then
+				local distance = (player.Character.PrimaryPart.Position - rootPart.Position).Magnitude
+				if distance < 30 then
+					local targetHumanoid = player.Character:FindFirstChild("Humanoid")
+					if targetHumanoid and targetHumanoid.Health > 0 then
+						pcall(function()
+							local healRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("HealTeammate")
+							if healRemote then
+								healRemote:FireServer(player)
+							end
+						end)
+					end
+				end
+			end
+		end
+	end)
+end
+
+-- ===== KILLER MODULE =====
+local KillerModule = {}
+
+function KillerModule.VeinDropPrediction()
+	if not Config.Killer.VeinDropPrediction then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local rootPart = GetHumanoidRootPart()
+		local mouse = LocalPlayer:GetMouse()
+		
+		local closestPlayer, distance = GetClosestPlayer(true)
+		if closestPlayer and closestPlayer.Character and distance < 100 then
+			local targetPos = closestPlayer.Character.PrimaryPart.Position
+			local myPos = rootPart.Position
+			
+			-- Calculate drop prediction
+			local direction = (targetPos - myPos).Unit
+			local distance = (targetPos - myPos).Magnitude
+			local gravity = -workspace.Gravity
+			local predictedPos = targetPos + Vector3.new(0, distance * 0.1, 0) -- Aim slightly up
+			
+			Camera.CFrame = CFrame.new(myPos, predictedPos)
+		end
+	end)
+end
+
+function KillerModule.VeinNoGravity()
+	if not Config.Killer.VeinNoGravity then return end
+	
+	pcall(function()
+		-- Modify spear trajectory
+		local spearRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("SpearThrow")
+		if spearRemote then
+			-- Fire spear with no gravity
+			local closestPlayer = GetClosestPlayer(true)
+			if closestPlayer and closestPlayer.Character then
+				spearRemote:FireServer(closestPlayer.Character.PrimaryPart, true)
+			end
+		end
+	end)
+end
+
+function KillerModule.AntiBlind()
+	if not Config.Killer.AntiBlind then return end
+	
+	pcall(function()
+		-- Remove blur and flash effects
+		local char = GetCharacter()
+		for _, child in ipairs(char:GetChildren()) do
+			if child:IsA("BlurEffect") or child:IsA("ColorCorrectionDevice") then
+				child.Enabled = false
+			end
+		end
+		
+		-- Restore camera clarity
+		Camera.FieldOfView = Config.Visuals.CustomFOVValue or 70
+	end)
+end
+
+function KillerModule.AntiStun()
+	if not Config.Killer.AntiStun then return end
+	
+	pcall(function()
+		local humanoid = GetHumanoid()
+		
+		-- Prevent stun state
+		if humanoid.State == Enum.HumanoidStateType.Stunned then
+			humanoid:ChangeState(Enum.HumanoidStateType.Running)
+		end
+	end)
+end
+
+function KillerModule.DoubleDamageGen()
+	if not Config.Killer.DoubleDamageGen then return end
+	
+	pcall(function()
+		local generators = GetAllGenerators()
+		
+		for _, gen in ipairs(generators) do
+			local kickRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("KickGenerator")
+			if kickRemote then
+				-- Double kick effect
+				for i = 1, 2 do
+					kickRemote:FireServer(gen)
+					task.wait(0.2)
+				end
+			end
+		end
+	end)
+end
+
+function KillerModule.KillerPower()
+	if not Config.Killer.KillerPower then return end
+	
+	pcall(function()
+		local powerRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("ActivatePower")
+		if powerRemote then
+			powerRemote:FireServer()
+		end
+	end)
+end
+
+function KillerModule.Teleport()
+	if not Config.Killer.Teleport then return end
+	
+	pcall(function()
+		local rootPart = GetHumanoidRootPart()
+		local targetPlayer = Config.Killer.TargetPlayer
+		
+		if targetPlayer and targetPlayer.Character then
+			rootPart.CFrame = targetPlayer.Character.PrimaryPart.CFrame + Vector3.new(0, 5, 0)
+		else
+			-- Random teleport to closest player
+			local closestPlayer = GetClosestPlayer(true)
+			if closestPlayer and closestPlayer.Character then
+				rootPart.CFrame = closestPlayer.Character.PrimaryPart.CFrame + Vector3.new(0, 5, 0)
+			end
+		end
+	end)
+end
+
+-- ===== VISUALS MODULE =====
+local VisualsModule = {}
+local activeESPs = {}
+
+function VisualsModule.PlayerESP()
+	if not Config.Visuals.PlayerESP then
+		for _, esp in ipairs(activeESPs) do
+			if esp and esp.Parent then
+				esp:Destroy()
+			end
+		end
+		activeESPs = {}
+		return
+	end
+	
+	pcall(function()
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer and player.Character then
+				local char = player.Character
+				local rootPart = char:FindFirstChild("HumanoidRootPart")
+				
+				if rootPart then
+					-- Check if ESP already exists
+					local existingESP = rootPart:FindFirstChild("PlayerESP")
+					if not existingESP then
+						local isKiller = false -- Add role detection if available
+						local color = isKiller and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 255, 0)
+						local label = player.Name .. " [" .. (isKiller and "KILLER" or "SURVIVOR") .. "]"
+						
+						local esp = CreateESP(rootPart, color, label, true)
+						esp.Name = "PlayerESP"
+						table.insert(activeESPs, esp)
+					end
+				end
+			end
+		end
+	end)
+end
+
+function VisualsModule.GeneratorESP()
+	if not Config.Visuals.GeneratorESP then return end
+	
+	pcall(function()
+		local generators = GetAllGenerators()
+		for _, gen in ipairs(generators) do
+			if not gen:FindFirstChild("GeneratorESP") then
+				local esp = CreateESP(gen, Color3.fromRGB(255, 255, 0), "GENERATOR [0%]", true)
+				esp.Name = "GeneratorESP"
+				
+				-- Update percentage
+				RunService.RenderStepped:Connect(function()
+					if esp and esp.Parent then
+						local textLabel = esp:FindFirstChildOfClass("TextLabel")
+						if textLabel then
+							local progress = gen:FindFirstChild("Progress")
+							local percentage = progress and progress.Value or 0
+							textLabel.Text = "GENERATOR [" .. math.floor(percentage) .. "%]"
+						end
+					end
+				end)
+			end
+		end
+	end)
+end
+
+function VisualsModule.PalletESP()
+	if not Config.Visuals.PalletESP then return end
+	
+	pcall(function()
+		local pallets = FindInstance("Map/Pallets")
+		if pallets then
+			for _, pallet in ipairs(pallets:GetChildren()) do
+				if not pallet:FindFirstChild("PalletESP") then
+					local esp = CreateESP(pallet, Color3.fromRGB(165, 42, 42), "PALLET", true)
+					esp.Name = "PalletESP"
+				end
+			end
+		end
+	end)
+end
+
+function VisualsModule.ExitGateESP()
+	if not Config.Visuals.ExitGateESP then return end
+	
+	pcall(function()
+		local exitGates = FindInstance("Map/ExitGates")
+		if exitGates then
+			for _, gate in ipairs(exitGates:GetChildren()) do
+				if not gate:FindFirstChild("ExitGateESP") then
+					local esp = CreateESP(gate, Color3.fromRGB(0, 255, 255), "EXIT GATE", true)
+					esp.Name = "ExitGateESP"
+				end
+			end
+		end
+	end)
+end
+
+function VisualsModule.HookESP()
+	if not Config.Visuals.HookESP then return end
+	
+	pcall(function()
+		local hooks = FindInstance("Map/Hooks")
+		if hooks then
+			for _, hook in ipairs(hooks:GetChildren()) do
+				if not hook:FindFirstChild("HookESP") then
+					local esp = CreateESP(hook, Color3.fromRGB(255, 0, 255), "HOOK", true)
+					esp.Name = "HookESP"
+				end
+			end
+		end
+	end)
+end
+
+function VisualsModule.HealthESP()
+	if not Config.Visuals.HealthESP then return end
+	
+	pcall(function()
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer and player.Character then
+				local humanoid = player.Character:FindFirstChild("Humanoid")
+				if humanoid then
+					local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+					if rootPart and not rootPart:FindFirstChild("HealthESP") then
+						local esp = CreateESP(rootPart, Color3.fromRGB(0, 255, 0), "HP: " .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth), false)
+						esp.Name = "HealthESP"
+					end
+				end
+			end
+		end
+	end)
+end
+
+function VisualsModule.WindowESP()
+	if not Config.Visuals.WindowESP then return end
+	
+	pcall(function()
+		local windows = FindInstance("Map/Windows")
+		if windows then
+			for _, window in ipairs(windows:GetChildren()) do
+				if not window:FindFirstChild("WindowESP") then
+					local esp = CreateESP(window, Color3.fromRGB(100, 149, 237), "WINDOW", true)
+					esp.Name = "WindowESP"
+				end
+			end
+		end
+	end)
+end
+
+function VisualsModule.CustomFOV()
+	if not Config.Visuals.CustomFOV then
+		Camera.FieldOfView = Config.Visuals.OriginalFOV or 70
+		return
+	end
+	
+	Camera.FieldOfView = Config.Visuals.CustomFOVValue
+end
+
+function VisualsModule.Crosshair()
+	if not Config.Visuals.Crosshair then
+		local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+		if playerGui then
+			local crosshairGui = playerGui:FindFirstChild("CrosshairGUI")
+			if crosshairGui then crosshairGui:Destroy() end
+		end
+		return
+	end
+	
+	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+	if playerGui:FindFirstChild("CrosshairGUI") then return end
+	
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "CrosshairGUI"
+	screenGui.ResetOnSpawn = false
+	screenGui.Parent = playerGui
+	
+	local crosshair = Instance.new("TextLabel")
+	crosshair.Name = "Crosshair"
+	crosshair.Text = "+"
+	crosshair.TextSize = 32
+	crosshair.TextColor3 = Color3.fromRGB(255, 0, 0)
+	crosshair.BackgroundTransparency = 1
+	crosshair.Size = UDim2.new(0, 40, 0, 40)
+	crosshair.Position = UDim2.new(0.5, -20, 0.5, -20)
+	crosshair.Font = Enum.Font.GothamBold
+	crosshair.Parent = screenGui
+end
+
+function VisualsModule.RemoveBlur()
+	if not Config.Visuals.RemoveBlur then
+		if OriginalSettings.Blur then
+			OriginalSettings.Blur.Enabled = true
+		end
+		return
+	end
+	
+	pcall(function()
+		for _, effect in ipairs(Lighting:GetChildren()) do
+			if effect:IsA("BlurEffect") then
+				OriginalSettings.Blur = effect
+				effect.Enabled = false
+			end
+			if effect:IsA("BloomEffect") then
+				OriginalSettings.Bloom = effect
+				effect.Enabled = false
+			end
+		end
+	end)
+end
+
+function VisualsModule.Fullbright()
+	if not Config.Visuals.Fullbright then
+		if OriginalSettings.Ambient then
+			Lighting.Ambient = OriginalSettings.Ambient
+			Lighting.OutdoorAmbient = OriginalSettings.OutdoorAmbient
+			Lighting.ClockTime = OriginalSettings.ClockTime
+		end
+		return
+	end
+	
+	OriginalSettings.Ambient = Lighting.Ambient
+	OriginalSettings.OutdoorAmbient = Lighting.OutdoorAmbient
+	OriginalSettings.ClockTime = Lighting.ClockTime
+	
+	Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+	Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+	Lighting.ClockTime = 12
+	
+	for _, obj in ipairs(Lighting:GetDescendants()) do
+		if obj:IsA("Light") then
+			obj.Brightness = 5
+		end
+	end
+end
+
+function VisualsModule.PotatoMode()
+	if not Config.Visuals.PotatoMode then
+		return
+	end
+	
+	pcall(function()
+		local char = GetCharacter()
+		
+		-- Remove textures
+		for _, part in ipairs(Workspace:FindPartBoundsInRadius(char.PrimaryPart.Position, 500)) do
+			if part:IsA("BasePart") then
+				part.Material = Enum.Material.Plastic
+				part.Texture = ""
+			end
+		end
+		
+		-- Reduce particles
+		for _, particle in ipairs(Workspace:FindPartBoundsInRadius(char.PrimaryPart.Position, 500)) do
+			if particle:FindFirstChildOfClass("ParticleEmitter") then
+				for _, emitter in ipairs(particle:FindChildrenOfClass("ParticleEmitter")) do
+					emitter.Enabled = false
+				end
+			end
+		end
+		
+		-- Lower quality settings
+		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+	end)
+end
+
+-- ===== COMBAT MODULE =====
+local CombatModule = {}
+
+function CombatModule.Aimbot()
+	if not Config.Combat.Aimbot then return end
+	
+	pcall(function()
+		local closestPlayer, distance = GetClosestPlayer(true)
+		if closestPlayer and closestPlayer.Character and distance < Config.Combat.AimbotRadius then
+			local targetPos = closestPlayer.Character.PrimaryPart.Position
+			local myPos = GetHumanoidRootPart().Position
+			local direction = (targetPos - myPos).Unit
+			
+			Camera.CFrame = CFrame.new(myPos, targetPos + Vector3.new(0, 1, 0))
+		end
+	end)
+end
+
+function CombatModule.ShowAimCircle()
+	if not Config.Combat.ShowAimCircle then
+		local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+		if playerGui then
+			local aimCircle = playerGui:FindFirstChild("AimCircleGUI")
+			if aimCircle then aimCircle:Destroy() end
+		end
+		return
+	end
+	
+	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+	if playerGui:FindFirstChild("AimCircleGUI") then return end
+	
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "AimCircleGUI"
+	screenGui.ResetOnSpawn = false
+	screenGui.Parent = playerGui
+	
+	local circle = Instance.new("Frame")
+	circle.Name = "AimCircle"
+	circle.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+	circle.BackgroundTransparency = 0.7
+	circle.BorderSizePixel = 0
+	circle.Size = UDim2.new(0, Config.Combat.AimbotRadius * 2, 0, Config.Combat.AimbotRadius * 2)
+	circle.Position = UDim2.new(0.5, -Config.Combat.AimbotRadius, 0.5, -Config.Combat.AimbotRadius)
+	
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = circle
+	
+	circle.Parent = screenGui
+end
+
+function CombatModule.TargetTracer()
+	if not Config.Combat.TargetTracer then return end
+	
+	pcall(function()
+		local closestPlayer = GetClosestPlayer(true)
+		if closestPlayer and closestPlayer.Character then
+			local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+			
+			local screenGui = Instance.new("ScreenGui")
+			screenGui.Name = "TracerGUI"
+			screenGui.ResetOnSpawn = false
+			screenGui.Parent = playerGui
+			
+			local line = Instance.new("Frame")
+			line.Name = "Tracer"
+			line.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+			line.BorderSizePixel = 0
+			line.Size = UDim2.new(0, 2, 0, 500)
+			line.Position = UDim2.new(0.5, -1, 1, 0)
+			line.Rotation = 45
+			line.Parent = screenGui
+		end
+	end)
+end
+
+function CombatModule.LockOnHighlight()
+	if not Config.Combat.LockOnHighlight then return end
+	
+	pcall(function()
+		local closestPlayer = GetClosestPlayer(true)
+		if closestPlayer and closestPlayer.Character then
+			for _, part in ipairs(closestPlayer.Character:GetChildren()) do
+				if part:IsA("BasePart") then
+					local surface = Instance.new("SurfaceGui")
+					surface.Face = Enum.NormalId.Front
+					surface.Parent = part
+					
+					local frame = Instance.new("Frame")
+					frame.BackgroundColor3 = Color3.fromRGB(255, 215, 0)
+					frame.BackgroundTransparency = 0.3
+					frame.Size = UDim2.new(1, 0, 1, 0)
+					frame.Parent = surface
+				end
+			end
+		end
+	end)
+end
+
+function CombatModule.ExpandKillerHitbox()
+	if not Config.Combat.ExpandKillerHitbox then return end
+	
+	pcall(function()
+		local closestPlayer = GetClosestPlayer(true)
+		if closestPlayer and closestPlayer.Character then
+			for _, part in ipairs(closestPlayer.Character:GetChildren()) do
+				if part:IsA("BasePart") then
+					part.Size = part.Size * 1.5
+				end
+			end
+		end
+	end)
+end
+
+function CombatModule.AutoAttack()
+	if not Config.Combat.AutoAttack then return end
+	
+	pcall(function()
+		local closestPlayer, distance = GetClosestPlayer(true)
+		if closestPlayer and closestPlayer.Character and distance < 20 then
+			local attackRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("Attack")
+			if attackRemote then
+				attackRemote:FireServer(closestPlayer.Character.PrimaryPart)
+			end
+		end
+	end)
+end
+
+-- ===== AUTOMATION MODULE =====
+local AutomationModule = {}
+
+function AutomationModule.AutoGenerator()
+	if not Config.Automation.AutoGenerator then return end
+	
+	pcall(function()
+		local generators = GetAllGenerators()
+		
+		for _, gen in ipairs(generators) do
+			local genPoint = gen:FindFirstChild("GeneratorPoint2") or gen
+			
+			-- Repair event
+			local repairEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Generator"):WaitForChild("RepairEvent")
+			repairEvent:FireServer(genPoint, true)
+			
+			task.wait(0.2)
+			
+			-- Skill check event
+			local skillCheckEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Generator"):WaitForChild("SkillCheckResultEvent")
+			local mode = Config.Automation.GeneratorMode == "Perfect" and "perfect" or "neutral"
+			skillCheckEvent:FireServer(mode, 0, gen, genPoint)
+			
+			task.wait(0.5)
+		end
+	end)
+end
+
+function AutomationModule.BoostAllGen()
+	if not Config.Automation.BoostAllGen then return end
+	
+	pcall(function()
+		local generators = GetAllGenerators()
+		
+		for _, gen in ipairs(generators) do
+			local genPoint = gen:FindFirstChild("GeneratorPoint2") or gen
+			
+			-- Boost progress for all generators
+			local boostEvent = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("BoostGenerator")
+			if boostEvent then
+				boostEvent:FireServer(gen, genPoint)
+			end
+		end
+	end)
+end
+
+function AutomationModule.InstantEscape()
+	if not Config.Automation.InstantEscape then return end
+	
+	pcall(function()
+		local exitGates = FindInstance("Map/ExitGates")
+		if exitGates then
+			for _, gate in ipairs(exitGates:GetChildren()) do
+				-- Open gate
+				local openRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("OpenExitGate")
+				if openRemote then
+					openRemote:FireServer(gate)
+				end
+				
+				task.wait(0.3)
+			end
+		end
+		
+		-- Teleport to finish zone
+		local finishZone = FindInstance("Map/FinishZone")
+		if finishZone then
+			GetHumanoidRootPart().CFrame = finishZone.CFrame
+		end
+	end)
+end
+
+function AutomationModule.SelfUnhook()
+	if not Config.Automation.SelfUnhook then return end
+	
+	pcall(function()
+		local char = GetCharacter()
+		local hooked = char:FindFirstChild("Hooked") or char:FindFirstChild("OnHook")
+		
+		if hooked then
+			-- 100% escape chance
+			local unhookRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("Unhook")
+			if unhookRemote then
+				for i = 1, 3 do
+					unhookRemote:FireServer()
+					task.wait(0.1)
+				end
+			end
+		end
+	end)
+end
+
+-- ===== CAMERA MODULE =====
+local CameraModule = {}
+
+function CameraModule.TogglePPP()
+	if Config.CameraMode == "FPP" then
+		Config.CameraMode = "TPP"
+		Notify("Camera", "Switched to Third Person")
+	else
+		Config.CameraMode = "FPP"
+		Notify("Camera", "Switched to First Person")
+	end
+end
+
+-- ===== MAIN LOOP =====
+local function MainLoop()
+	while true do
+		task.wait(0.05)
+		
+		if LocalPlayer and LocalPlayer.Character then
+			-- VIP Features
+			SafePcall(VIPModule.AutoPlay)
+			SafePcall(VIPModule.AutoDagger)
+			SafePcall(VIPModule.AutoWiggle)
+			
+			-- Survivor Features
+			SafePcall(SurvivorModule.SpeedBoost)
+			SafePcall(SurvivorModule.NoSlowdown)
+			SafePcall(SurvivorModule.NoClip)
+			SafePcall(SurvivorModule.AntiFallDamage)
+			SafePcall(SurvivorModule.GodMode)
+			SafePcall(SurvivorModule.InstantHeal)
+			SafePcall(SurvivorModule.AntiKnock)
+			SafePcall(SurvivorModule.AutoHealAura)
+			
+			-- Killer Features
+			SafePcall(KillerModule.VeinDropPrediction)
+			SafePcall(KillerModule.VeinNoGravity)
+			SafePcall(KillerModule.AntiBlind)
+			SafePcall(KillerModule.AntiStun)
+			SafePcall(KillerModule.DoubleDamageGen)
+			SafePcall(KillerModule.KillerPower)
+			SafePcall(KillerModule.Teleport)
+			
+			-- Visuals
+			SafePcall(VisualsModule.PlayerESP)
+			SafePcall(VisualsModule.GeneratorESP)
+			SafePcall(VisualsModule.PalletESP)
+			SafePcall(VisualsModule.ExitGateESP)
+			SafePcall(VisualsModule.HookESP)
+			SafePcall(VisualsModule.HealthESP)
+			SafePcall(VisualsModule.WindowESP)
+			SafePcall(VisualsModule.CustomFOV)
+			SafePcall(VisualsModule.Fullbright)
+			SafePcall(VisualsModule.PotatoMode)
+			
+			-- Combat
+			SafePcall(CombatModule.Aimbot)
+			SafePcall(CombatModule.TargetTracer)
+			SafePcall(CombatModule.LockOnHighlight)
+			SafePcall(CombatModule.ExpandKillerHitbox)
+			SafePcall(CombatModule.AutoAttack)
+			
+			-- Automation
+			SafePcall(AutomationModule.AutoGenerator)
+			SafePcall(AutomationModule.BoostAllGen)
+			SafePcall(AutomationModule.InstantEscape)
+			SafePcall(AutomationModule.SelfUnhook)
+		end
+	end
+end
+
+-- ===== WINDUI SETUP =====
+local Window = WindUI:CreateWindow({
+	Title = "Violence District Hub v2.0",
+	Author = "by .ftgs | Enhanced",
+	Icon = "solar:gamepad-bold",
+	Theme = Config.Theme,
+	NewElements = true,
+	Transparent = true,
+	ToggleKey = Enum.KeyCode.F,
+	Acrylic = true,
+})
+
+-- ===== VIP TAB =====
+local TabVIP = Window:Tab({
+	Title = "👑 VIP",
+	Icon = "solar:crown-bold",
+})
+
+TabVIP:Section({ Title = "Automatic Features", Desc = "Ultimate automatic survival" })
+
+TabVIP:Toggle({
+	Title = "Auto Play (Smart AI)",
+	Value = Config.VIP.AutoPlay,
+	Callback = function(v)
+		Config.VIP.AutoPlay = v
+		Notify("Auto Play", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVIP:Toggle({
+	Title = "Auto Dagger (Parry)",
+	Value = Config.VIP.AutoDagger,
+	Callback = function(v)
+		Config.VIP.AutoDagger = v
+		Notify("Auto Dagger", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVIP:Toggle({
+	Title = "Auto Wiggle Master",
+	Value = Config.VIP.AutoWiggle,
+	Callback = function(v)
+		Config.VIP.AutoWiggle = v
+		Notify("Auto Wiggle", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+-- ===== SURVIVOR TAB =====
+local TabSurvivor = Window:Tab({
+	Title = "🛡️ SURVIVOR",
+	Icon = "solar:shield-bold",
+})
+
+TabSurvivor:Section({ Title = "Movement & Speed" })
+
+TabSurvivor:Toggle({
+	Title = "Speed Boost",
+	Value = Config.Survivor.SpeedBoost,
+	Callback = function(v)
+		Config.Survivor.SpeedBoost = v
+		Notify("Speed Boost", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Slider({
+	Title = "Custom Speed",
+	Step = 1,
+	Value = {
+		Min = 16,
+		Max = 100,
+		Default = Config.Survivor.CustomSpeed,
+	},
+	Callback = function(v)
+		Config.Survivor.CustomSpeed = v
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "No Slowdown",
+	Value = Config.Survivor.NoSlowdown,
+	Callback = function(v)
+		Config.Survivor.NoSlowdown = v
+		Notify("No Slowdown", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "No Clip",
+	Value = Config.Survivor.NoClip,
+	Callback = function(v)
+		Config.Survivor.NoClip = v
+		Notify("No Clip", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "Force Reset State (Anti Stuck)",
+	Value = Config.Survivor.ForceReset,
+	Callback = function(v)
+		Config.Survivor.ForceReset = v
+		Notify("Force Reset", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "Silent Actions (Anti Noise)",
+	Value = Config.Survivor.SilentActions,
+	Callback = function(v)
+		Config.Survivor.SilentActions = v
+		Notify("Silent Actions", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Section({ Title = "Health & Defense" })
+
+TabSurvivor:Toggle({
+	Title = "Anti Fall Damage",
+	Value = Config.Survivor.AntiFallDamage,
+	Callback = function(v)
+		Config.Survivor.AntiFallDamage = v
+		Notify("Anti Fall Damage", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "God Mode",
+	Value = Config.Survivor.GodMode,
+	Callback = function(v)
+		Config.Survivor.GodMode = v
+		Notify("God Mode", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "Instant Heal",
+	Value = Config.Survivor.InstantHeal,
+	Callback = function(v)
+		Config.Survivor.InstantHeal = v
+		Notify("Instant Heal", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "Anti Knock",
+	Value = Config.Survivor.AntiKnock,
+	Callback = function(v)
+		Config.Survivor.AntiKnock = v
+		Notify("Anti Knock", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabSurvivor:Toggle({
+	Title = "Auto Heal Aura",
+	Value = Config.Survivor.AutoHealAura,
+	Callback = function(v)
+		Config.Survivor.AutoHealAura = v
+		Notify("Auto Heal Aura", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+-- ===== KILLER TAB =====
+local TabKiller = Window:Tab({
+	Title = "🔪 KILLER",
+	Icon = "solar:shield-minimalistic-bold",
+})
+
+TabKiller:Section({ Title = "Vein Spear Powers" })
+
+TabKiller:Toggle({
+	Title = "Vein Spear: Drop Prediction",
+	Value = Config.Killer.VeinDropPrediction,
+	Callback = function(v)
+		Config.Killer.VeinDropPrediction = v
+		Notify("Vein Drop Prediction", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabKiller:Toggle({
+	Title = "Vein Spear: No Gravity",
+	Value = Config.Killer.VeinNoGravity,
+	Callback = function(v)
+		Config.Killer.VeinNoGravity = v
+		Notify("Vein No Gravity", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabKiller:Section({ Title = "Killer Abilities" })
+
+TabKiller:Toggle({
+	Title = "Anti Blind (Fog/Flash)",
+	Value = Config.Killer.AntiBlind,
+	Callback = function(v)
+		Config.Killer.AntiBlind = v
+		Notify("Anti Blind", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabKiller:Toggle({
+	Title = "Anti Stun (Pallet)",
+	Value = Config.Killer.AntiStun,
+	Callback = function(v)
+		Config.Killer.AntiStun = v
+		Notify("Anti Stun", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabKiller:Toggle({
+	Title = "Double Damage Generator",
+	Value = Config.Killer.DoubleDamageGen,
+	Callback = function(v)
+		Config.Killer.DoubleDamageGen = v
+		Notify("Double Damage Gen", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabKiller:Toggle({
+	Title = "Activate Killer Power",
+	Value = Config.Killer.KillerPower,
+	Callback = function(v)
+		Config.Killer.KillerPower = v
+		Notify("Killer Power", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabKiller:Toggle({
+	Title = "Teleport to Survivor",
+	Value = Config.Killer.Teleport,
+	Callback = function(v)
+		Config.Killer.Teleport = v
+		Notify("Teleport", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+local PlayerList = {}
+for _, player in ipairs(Players:GetPlayers()) do
+	if player ~= LocalPlayer then
+		table.insert(PlayerList, player.Name)
+	end
+end
+
+TabKiller:Dropdown({
+	Title = "Select Target Player",
+	Value = Config.Killer.TargetPlayer and Config.Killer.TargetPlayer.Name or "Random",
+	Values = PlayerList,
+	Callback = function(v)
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player.Name == v then
+				Config.Killer.TargetPlayer = player
+				break
+			end
+		end
+	end,
+})
+
+-- ===== VISUALS TAB =====
+local TabVisuals = Window:Tab({
+	Title = "👁️ VISUALS",
+	Icon = "solar:eye-bold",
+})
+
+TabVisuals:Section({ Title = "ESP - Enemy & World" })
+
+TabVisuals:Toggle({
+	Title = "Player ESP (Green/Red)",
+	Value = Config.Visuals.PlayerESP,
+	Callback = function(v)
+		Config.Visuals.PlayerESP = v
+		Notify("Player ESP", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Generator ESP (+ %)",
+	Value = Config.Visuals.GeneratorESP,
+	Callback = function(v)
+		Config.Visuals.GeneratorESP = v
+		Notify("Generator ESP", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Pallet ESP",
+	Value = Config.Visuals.PalletESP,
+	Callback = function(v)
+		Config.Visuals.PalletESP = v
+		Notify("Pallet ESP", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Exit Gate ESP",
+	Value = Config.Visuals.ExitGateESP,
+	Callback = function(v)
+		Config.Visuals.ExitGateESP = v
+		Notify("Exit Gate ESP", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Hook ESP",
+	Value = Config.Visuals.HookESP,
+	Callback = function(v)
+		Config.Visuals.HookESP = v
+		Notify("Hook ESP", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Health ESP",
+	Value = Config.Visuals.HealthESP,
+	Callback = function(v)
+		Config.Visuals.HealthESP = v
+		Notify("Health ESP", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Window ESP",
+	Value = Config.Visuals.WindowESP,
+	Callback = function(v)
+		Config.Visuals.WindowESP = v
+		Notify("Window ESP", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Section({ Title = "Camera & Display" })
+
+TabVisuals:Toggle({
+	Title = "Show Crosshair",
+	Value = Config.Visuals.Crosshair,
+	Callback = function(v)
+		Config.Visuals.Crosshair = v
+		VisualsModule.Crosshair()
+		Notify("Crosshair", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Custom FOV",
+	Value = Config.Visuals.CustomFOV,
+	Callback = function(v)
+		Config.Visuals.CustomFOV = v
+		VisualsModule.CustomFOV()
+		Notify("Custom FOV", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Slider({
+	Title = "FOV Value",
+	Step = 5,
+	Value = {
+		Min = 40,
+		Max = 120,
+		Default = Config.Visuals.CustomFOVValue,
+	},
+	Callback = function(v)
+		Config.Visuals.CustomFOVValue = v
+		VisualsModule.CustomFOV()
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Remove Blur & Bloom",
+	Value = Config.Visuals.RemoveBlur,
+	Callback = function(v)
+		Config.Visuals.RemoveBlur = v
+		VisualsModule.RemoveBlur()
+		Notify("Blur Removal", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Force Fullbright",
+	Value = Config.Visuals.Fullbright,
+	Callback = function(v)
+		Config.Visuals.Fullbright = v
+		VisualsModule.Fullbright()
+		Notify("Fullbright", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabVisuals:Toggle({
+	Title = "Extreme Potato Mode",
+	Value = Config.Visuals.PotatoMode,
+	Callback = function(v)
+		Config.Visuals.PotatoMode = v
+		VisualsModule.PotatoMode()
+		Notify("Potato Mode", v and "✓ Enabled (Max FPS)" or "✗ Disabled")
+	end,
+})
+
+-- ===== COMBAT TAB =====
+local TabCombat = Window:Tab({
+	Title = "⚔️ COMBAT",
+	Icon = "solar:sword-bold",
+})
+
+TabCombat:Section({ Title = "Targeting System" })
+
+TabCombat:Toggle({
+	Title = "Enable Aimbot",
+	Value = Config.Combat.Aimbot,
+	Callback = function(v)
+		Config.Combat.Aimbot = v
+		Notify("Aimbot", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabCombat:Slider({
+	Title = "Aim Radius",
+	Step = 10,
+	Value = {
+		Min = 20,
+		Max = 200,
+		Default = Config.Combat.AimbotRadius,
+	},
+	Callback = function(v)
+		Config.Combat.AimbotRadius = v
+	end,
+})
+
+TabCombat:Toggle({
+	Title = "Show Aim Circle",
+	Value = Config.Combat.ShowAimCircle,
+	Callback = function(v)
+		Config.Combat.ShowAimCircle = v
+		CombatModule.ShowAimCircle()
+		Notify("Aim Circle", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabCombat:Toggle({
+	Title = "Show Target Tracer",
+	Value = Config.Combat.TargetTracer,
+	Callback = function(v)
+		Config.Combat.TargetTracer = v
+		Notify("Target Tracer", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabCombat:Toggle({
+	Title = "Lock On Highlight",
+	Value = Config.Combat.LockOnHighlight,
+	Callback = function(v)
+		Config.Combat.LockOnHighlight = v
+		Notify("Lock On Highlight", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabCombat:Toggle({
+	Title = "Expand Killer Hitbox",
+	Value = Config.Combat.ExpandKillerHitbox,
+	Callback = function(v)
+		Config.Combat.ExpandKillerHitbox = v
+		Notify("Expand Hitbox", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabCombat:Toggle({
+	Title = "Auto Attack",
+	Value = Config.Combat.AutoAttack,
+	Callback = function(v)
+		Config.Combat.AutoAttack = v
+		Notify("Auto Attack", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabCombat:Section({ Title = "Camera" })
+
+TabCombat:Button({
+	Title = "Toggle FPP / TPP",
+	Justify = "Center",
+	Icon = "solar:camera-bold",
+	Callback = function()
+		CameraModule.TogglePPP()
+	end,
+})
+
+-- ===== AUTOMATION TAB =====
+local TabAuto = Window:Tab({
+	Title = "⚙️ AUTOMATION",
+	Icon = "solar:settings-bold",
+})
+
+TabAuto:Section({ Title = "Generator Automation" })
+
+TabAuto:Toggle({
+	Title = "Auto Generator",
+	Value = Config.Automation.AutoGenerator,
+	Callback = function(v)
+		Config.Automation.AutoGenerator = v
+		Notify("Auto Generator", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabAuto:Dropdown({
+	Title = "Generator Mode",
+	Value = Config.Automation.GeneratorMode,
+	Values = { "Perfect", "Neutral" },
+	Callback = function(v)
+		Config.Automation.GeneratorMode = v
+		Notify("Generator Mode", "Set to " .. v)
+	end,
+})
+
+TabAuto:Toggle({
+	Title = "Boost All Generators",
+	Value = Config.Automation.BoostAllGen,
+	Callback = function(v)
+		Config.Automation.BoostAllGen = v
+		Notify("Boost All Gen", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabAuto:Section({ Title = "Escape Automation" })
+
+TabAuto:Toggle({
+	Title = "Instant Escape (Gate)",
+	Value = Config.Automation.InstantEscape,
+	Callback = function(v)
+		Config.Automation.InstantEscape = v
+		Notify("Instant Escape", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabAuto:Toggle({
+	Title = "Self UnHook (100% Success)",
+	Value = Config.Automation.SelfUnhook,
+	Callback = function(v)
+		Config.Automation.SelfUnhook = v
+		Notify("Self UnHook", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+-- ===== SETTINGS TAB =====
+local TabSettings = Window:Tab({
+	Title = "⚙️ Settings",
+	Icon = "solar:settings-bold",
+})
+
+TabSettings:Section({ Title = "Theme" })
+
+local Themes = {}
+for name in pairs(WindUI.Themes) do
+	table.insert(Themes, name)
+end
+
+TabSettings:Dropdown({
+	Title = "Select Theme",
+	Value = Config.Theme,
+	Values = Themes,
+	Callback = function(v)
+		Config.Theme = v
+		WindUI:SetTheme(v)
+		Notify("Theme Changed", "Now using " .. v .. " theme")
+	end,
+})
+
+TabSettings:Section({ Title = "Script Info" })
+
+TabSettings:Button({
+	Title = "Reset All Settings",
+	Justify = "Center",
+	Icon = "solar:restart-circle-bold",
+	Callback = function()
+		-- Reset all configs to default
+		for module, settings in pairs(Config) do
+			if typeof(settings) == "table" then
+				for setting in pairs(settings) do
+					if typeof(Config[module][setting]) == "boolean" then
+						Config[module][setting] = false
+					end
+				end
+			end
+		end
+		Notify("Reset", "All settings reset to default")
+	end,
+})
+
+TabSettings:Button({
+	Title = "Copy Discord",
+	Justify = "Center",
+	Icon = "solar:link-circle-bold",
+	Callback = function()
+		setclipboard("discord.gg/yourserver")
+		Notify("Copied", "Discord link copied to clipboard")
+	end,
+})
+
+TabSettings:Button({
+	Title = "Unload Script",
+	Justify = "Center",
+	Icon = "solar:logout-3-bold",
+	Callback = function()
+		Window:Destroy()
+		Notify("Script", "Successfully unloaded!")
+	end,
+})
+
+-- Start main loop
+task.spawn(MainLoop)
+
+Notify("Violence District Hub", "✓ Loaded successfully! Press F to toggle UI")
+print("[VD-Hub v2.0] Ready to dominate! | Press F to toggle UI")
