@@ -1236,7 +1236,7 @@ end
 -- ===== WINDUI SETUP =====
 local Window = WindUI:CreateWindow({
 	Title = "Violence District Hub v3.0",
-	Author = "by .ftgs | FIXED & UPDATED",
+	Author = "by Jackson Storm",
 	Icon = "solar:gamepad-bold",
 	Theme = Config.Theme,
 	NewElements = true,
@@ -1247,7 +1247,7 @@ local Window = WindUI:CreateWindow({
 
 -- ===== VIP TAB =====
 local TabVIP = Window:Tab({
-	Title = "👑 VIP",
+	Title = "VIP",
 	Icon = "solar:crown-bold",
 })
 
@@ -1282,8 +1282,8 @@ TabVIP:Toggle({
 
 -- ===== SURVIVOR TAB =====
 local TabSurvivor = Window:Tab({
-	Title = "🛡️ SURVIVOR",
-	Icon = "solar:shield-bold",
+	Title = "SURVIVOR",
+	Icon = "solar:user-bold",
 })
 
 TabSurvivor:Section({ Title = "Movement & Speed" })
@@ -1395,7 +1395,7 @@ TabSurvivor:Toggle({
 
 -- ===== KILLER TAB =====
 local TabKiller = Window:Tab({
-	Title = "🔪 KILLER",
+	Title = "KILLER",
 	Icon = "solar:shield-minimalistic-bold",
 })
 
@@ -1491,7 +1491,7 @@ end
 
 -- ===== VISUALS TAB =====
 local TabVisuals = Window:Tab({
-	Title = "👁️ VISUALS",
+	Title = "VISUALS",
 	Icon = "solar:eye-bold",
 })
 
@@ -1716,8 +1716,8 @@ TabCombat:Button({
 
 -- ===== AUTOMATION TAB =====
 local TabAuto = Window:Tab({
-	Title = "⚙️ AUTOMATION",
-	Icon = "solar:settings-bold",
+	Title = "AUTOMATION",
+	Icon = "solar:play-bold",
 })
 
 TabAuto:Section({ Title = "Generator Automation" })
@@ -1772,7 +1772,7 @@ TabAuto:Toggle({
 
 -- ===== SETTINGS TAB =====
 local TabSettings = Window:Tab({
-	Title = "⚙️ Settings",
+	Title = "Settings",
 	Icon = "solar:settings-bold",
 })
 
