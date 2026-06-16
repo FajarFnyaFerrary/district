@@ -1,7 +1,7 @@
 --[[
     Violence District - Ultimate Mod Hub v3.0
     FIXED: ESP Player Highlight + POV Bug + Feature Stability
-    Author: .ftgs | Enhanced by Copilot
+    Author: .ftgs | Enhanced by Copilot & Gemini
 ]]
 
 local cloneref = (cloneref or clonereference or function(instance)
@@ -170,25 +170,28 @@ local function GetAllGenerators()
 	return generators
 end
 
+-- FIX & UPDATE: Fungsi pembuat Highlight murni tembus tembok untuk Player Model
 local function CreateHighlightBox(object, color, label, isKiller)
-	if not object or object:IsDescendantOf(Players) then return nil end
+	if not object then return nil end
 	
+	-- Membuat Highlight effect pada model karakter
 	local highlight = Instance.new("Highlight")
+	highlight.Name = "PlayerHighlight"
 	highlight.Adornee = object
 	highlight.FillColor = color
-	highlight.OutlineColor = color
-	highlight.FillTransparency = 0.3
+	highlight.OutlineColor = Color3.fromRGB(255, 255, 255) -- Outline putih biar tegas
+	highlight.FillTransparency = 0.4
 	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- Tembus tembok wajib AlwaysOnTop
 	highlight.Parent = object
-	
-	-- Make it visible through walls
-	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	
 	if label then
 		local billboard = Instance.new("BillboardGui")
+		billboard.Name = "PlayerBillboard"
 		billboard.MaxDistance = 500
 		billboard.Size = UDim2.new(6, 0, 2, 0)
-		billboard.StudsOffset = Vector3.new(0, 5, 0)
+		billboard.StudsOffset = Vector3.new(0, 4, 0) -- Posisi teks di atas kepala
+		billboard.AlwaysOnTop = true -- FIXED: Teks sekarang ikutan tembus tembok!
 		billboard.Parent = object
 		
 		local textLabel = Instance.new("TextLabel")
@@ -205,9 +208,12 @@ local function CreateHighlightBox(object, color, label, isKiller)
 end
 
 local function DestroyAllHighlights()
-	for _, highlight in ipairs(activeHighlights) do
-		if highlight and highlight.Parent then
-			highlight:Destroy()
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player.Character then
+			local hl = player.Character:FindFirstChild("PlayerHighlight")
+			if hl then hl:Destroy() end
+			local bb = player.Character:FindFirstChild("PlayerBillboard")
+			if bb then bb:Destroy() end
 		end
 	end
 	activeHighlights = {}
@@ -310,28 +316,6 @@ function VIPModule.AutoDagger()
 					end
 				end)
 			end
-		end
-	end)
-end
-
-function VIPModule.AutoWiggle()
-	if not Config.VIP.AutoWiggle then return end
-	
-	pcall(function()
-		local char = GetCharacter()
-		local humanoid = GetHumanoid()
-		
-		local grabbed = char:FindFirstChild("Grabbed") or humanoid:FindFirstChild("Grabbed")
-		if grabbed then
-			pcall(function()
-				local wiggleRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("Wiggle")
-				if wiggleRemote then
-					for i = 1, 10 do
-						wiggleRemote:FireServer()
-						task.wait(0.05)
-					end
-				end
-			end)
 		end
 	end)
 end
@@ -599,6 +583,7 @@ end
 -- ===== VISUALS MODULE (FIXED) =====
 local VisualsModule = {}
 
+-- FIX & UPDATE: Fungsi ESP Highlight Player Utama
 function VisualsModule.PlayerESPHighlight()
 	if not Config.Visuals.PlayerHighlight then
 		DestroyAllHighlights()
@@ -609,22 +594,22 @@ function VisualsModule.PlayerESPHighlight()
 		for _, player in ipairs(Players:GetPlayers()) do
 			if player ~= LocalPlayer and player.Character then
 				local char = player.Character
-				local rootPart = char:FindFirstChild("HumanoidRootPart")
 				
-				if rootPart then
-					-- Check if highlight already exists
-					local existingHighlight = rootPart:FindFirstChild("PlayerHighlight")
-					if not existingHighlight then
-						-- Determine role color
-						local isKiller = false
-						local color = isKiller and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 255, 0)
-						local label = player.Name .. " [" .. (isKiller and "KILLER" or "SURVIVOR") .. "]"
-						
-						local highlight = CreateHighlightBox(rootPart, color, label, isKiller)
-						if highlight then
-							highlight.Name = "PlayerHighlight"
-							table.insert(activeHighlights, highlight)
-						end
+				-- FIXED: Pasang Highlight langsung ke MODEL karakter agar seluruh tubuh menyala tembus pandang
+				local existingHighlight = char:FindFirstChild("PlayerHighlight")
+				if not existingHighlight then
+					-- Logika deteksi role dinamis (biar gak selamanya dianggap survivor)
+					local isKiller = false
+					if char:FindFirstChild("Killer") or player:FindFirstChild("Role") or char:GetAttribute("Role") == "Killer" or char.Name:lower():match("killer") then
+						isKiller = true
+					end
+					
+					local color = isKiller and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 255, 0)
+					local label = player.Name .. " [" .. (isKiller and "KILLER" or "SURVIVOR") .. "]"
+					
+					local highlight = CreateHighlightBox(char, color, label, isKiller)
+					if highlight then
+						table.insert(activeHighlights, highlight)
 					end
 				end
 			end
@@ -645,6 +630,7 @@ function VisualsModule.GeneratorESP()
 				billboard.MaxDistance = 500
 				billboard.Size = UDim2.new(6, 0, 2, 0)
 				billboard.StudsOffset = Vector3.new(0, 5, 0)
+				billboard.AlwaysOnTop = true
 				billboard.Parent = gen
 				billboard.Name = "GeneratorESP"
 				
@@ -675,6 +661,7 @@ function VisualsModule.PalletESP()
 					billboard.MaxDistance = 500
 					billboard.Size = UDim2.new(4, 0, 2, 0)
 					billboard.StudsOffset = Vector3.new(0, 3, 0)
+					billboard.AlwaysOnTop = true
 					billboard.Parent = pallet
 					billboard.Name = "PalletESP"
 					
@@ -706,6 +693,7 @@ function VisualsModule.ExitGateESP()
 					billboard.MaxDistance = 500
 					billboard.Size = UDim2.new(6, 0, 2, 0)
 					billboard.StudsOffset = Vector3.new(0, 5, 0)
+					billboard.AlwaysOnTop = true
 					billboard.Parent = gate
 					billboard.Name = "ExitGateESP"
 					
@@ -737,6 +725,7 @@ function VisualsModule.HookESP()
 					billboard.MaxDistance = 500
 					billboard.Size = UDim2.new(4, 0, 2, 0)
 					billboard.StudsOffset = Vector3.new(0, 3, 0)
+					billboard.AlwaysOnTop = true
 					billboard.Parent = hook
 					billboard.Name = "HookESP"
 					
@@ -770,6 +759,7 @@ function VisualsModule.HealthESP()
 						billboard.MaxDistance = 300
 						billboard.Size = UDim2.new(6, 0, 1.5, 0)
 						billboard.StudsOffset = Vector3.new(0, 6, 0)
+						billboard.AlwaysOnTop = true
 						billboard.Parent = rootPart
 						billboard.Name = "HealthESP"
 						
@@ -802,6 +792,7 @@ function VisualsModule.WindowESP()
 					billboard.MaxDistance = 500
 					billboard.Size = UDim2.new(4, 0, 2, 0)
 					billboard.StudsOffset = Vector3.new(0, 3, 0)
+					billboard.AlwaysOnTop = true
 					billboard.Parent = window
 					billboard.Name = "WindowESP"
 					
@@ -1184,7 +1175,6 @@ local function MainLoop()
 			-- VIP Features
 			SafePcall(VIPModule.AutoPlay)
 			SafePcall(VIPModule.AutoDagger)
-			SafePcall(VIPModule.AutoWiggle)
 			
 			-- Survivor Features
 			SafePcall(SurvivorModule.SpeedBoost)
@@ -1235,7 +1225,7 @@ end
 
 -- ===== WINDUI SETUP =====
 local Window = WindUI:CreateWindow({
-	Title = "Violence District Hub v3.0",
+	Title = "Violence District Hub v3.1",
 	Author = "by Jackson Storm",
 	Icon = "solar:gamepad-bold",
 	Theme = Config.Theme,
@@ -1268,15 +1258,6 @@ TabVIP:Toggle({
 	Callback = function(v)
 		Config.VIP.AutoDagger = v
 		Notify("Auto Dagger", v and "✓ Enabled" or "✗ Disabled")
-	end,
-})
-
-TabVIP:Toggle({
-	Title = "Auto Wiggle Master",
-	Value = Config.VIP.AutoWiggle,
-	Callback = function(v)
-		Config.VIP.AutoWiggle = v
-		Notify("Auto Wiggle", v and "✓ Enabled" or "✗ Disabled")
 	end,
 })
 
