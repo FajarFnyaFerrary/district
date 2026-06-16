@@ -1542,7 +1542,7 @@ TabVisuals:Toggle({
 -- ===== COMBAT TAB =====
 local TabCombat = Window:Tab({
 	Title = "COMBAT",
-	Icon = "solar:sword-bold",
+	Icon = "mdi:sword-cross",
 })
 
 
