@@ -59,6 +59,7 @@ local SpyData = {
 	SearchQuery = "",
 	SelectedLog = nil,
 	LastLogCount = 0,
+	LastSearchQuery = "",
 }
 
 -- ==================== UTILITY FUNCTIONS ====================
@@ -357,25 +358,32 @@ local LogSection = Tab1:Section({
 })
 
 local LogContainer = Tab1:Group()
+local LogButtons = {}
+
+local function clearLogButtons()
+	for _, btn in ipairs(LogButtons) do
+		pcall(function()
+			btn:Destroy()
+		end)
+	end
+	LogButtons = {}
+end
 
 local function updateLogDisplay()
-	-- Clear dan rebuild logs
-	pcall(function()
-		LogContainer:Destroy()
-	end)
-	LogContainer = Tab1:Group()
+	clearLogButtons()
 
 	local filteredLogs = getFilteredLogs()
 
 	if #filteredLogs == 0 then
-		Tab1:Paragraph({
-			Title = "No Logs",
-			Content = "Belum ada remote calls yang tertangkap",
-		})
+		LogSection:SetTitle("Logs (0 / " .. #SpyData.Logs .. ")")
 		return
 	end
 
-	for i = 1, math.min(25, #filteredLogs) do
+	-- Update section title dengan jumlah filtered results
+	LogSection:SetTitle("Logs (" .. #filteredLogs .. " / " .. #SpyData.Logs .. ")")
+
+	-- Create new log buttons
+	for i = 1, math.min(30, #filteredLogs) do
 		local log = filteredLogs[i]
 		local timeStr = os.date("%H:%M:%S", log.Timestamp)
 		local icon = log.RemoteType == "RemoteEvent" and "🔴" or "🔵"
@@ -390,7 +398,7 @@ local function updateLogDisplay()
 			.. "\n"
 			.. (log.ArgumentString:sub(1, 70) or "No Args")
 
-		LogContainer:Button({
+		local btn = LogContainer:Button({
 			Title = buttonText,
 			Justify = "Left",
 			Size = "Small",
@@ -399,23 +407,27 @@ local function updateLogDisplay()
 				Tab4:Select()
 			end,
 		})
+
+		table.insert(LogButtons, btn)
 	end
 end
 
 -- Update logs secara real-time
 local lastUpdateTime = 0
 RunService.RenderStepped:Connect(function()
-	if os.time() - lastUpdateTime < 0.5 or not SpyData.IsSpying then
+	if tick() - lastUpdateTime < 0.3 or not SpyData.IsSpying then
 		return
 	end
-	lastUpdateTime = os.time()
+	lastUpdateTime = tick()
 
-	if SpyData.LastLogCount ~= #SpyData.Logs then
+	-- Check if logs changed or search query changed
+	local filteredLogs = getFilteredLogs()
+	local needsUpdate = SpyData.LastLogCount ~= #SpyData.Logs or SpyData.LastSearchQuery ~= SpyData.SearchQuery
+
+	if needsUpdate then
 		SpyData.LastLogCount = #SpyData.Logs
+		SpyData.LastSearchQuery = SpyData.SearchQuery
 		updateLogDisplay()
-
-		local filteredCount = #getFilteredLogs()
-		LogSection:SetTitle("Logs (" .. filteredCount .. " / " .. #SpyData.Logs .. ")")
 	end
 end)
 
@@ -433,7 +445,7 @@ local StatsText = Tab2:Paragraph({
 })
 
 RunService.RenderStepped:Connect(function()
-	if os.time() - lastUpdateTime < 1 then
+	if tick() - lastUpdateTime < 1 then
 		return
 	end
 
