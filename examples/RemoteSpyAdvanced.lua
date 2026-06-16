@@ -580,6 +580,59 @@ function KillerModule.Teleport()
 	end)
 end
 
+function KillerModule.PredictNextKiller()
+	pcall(function()
+		local allPlayers = Players:GetPlayers()
+		if #allPlayers <= 1 then
+			Notify("🔮 Killer Prediction", "Kurang pemain untuk membuat prediksi.", 4)
+			return
+		end
+		
+		local predictedKiller = nil
+		local highestChance = -1
+		
+		-- Mencari indikator chance dari sistem game (jika ada nilainya di Leaderstats/Attributes)
+		for _, player in ipairs(allPlayers) do
+			local chanceAttribute = player:GetAttribute("KillerChance") or player:GetAttribute("Chance")
+			local leaderstats = player:FindFirstChild("leaderstats")
+			local chanceValue = leaderstats and (leaderstats:FindFirstChild("KillerChance") or leaderstats:FindFirstChild("Chance"))
+			
+			if chanceAttribute then
+				if chanceAttribute > highestChance then
+					highestChance = chanceAttribute
+					predictedKiller = player
+				end
+			elseif chanceValue and chanceValue:IsA("ValueBase") then
+				if chanceValue.Value > highestChance then
+					highestChance = chanceValue.Value
+					predictedKiller = player
+				end
+			end
+		end
+		
+		-- Fallback: Jika game tidak menggunakan sistem chance konvensional, 
+		-- kita lakukan kalkulasi pseudo-random murni dari list player yang bukan LocalPlayer.
+		if not predictedKiller then
+			local pool = {}
+			for _, player in ipairs(allPlayers) do
+				if player ~= LocalPlayer then
+					table.insert(pool, player)
+				end
+			end
+			if #pool > 0 then
+				predictedKiller = pool[math.random(1, #pool)]
+			end
+		end
+		
+		-- Tampilkan hasil lewat WindUI Notification
+		if predictedKiller then
+			Notify("🔮 Prediction Result", "Killer berikutnya: " .. predictedKiller.Name, 5)
+		else
+			Notify("🔮 Prediction Result", "Gagal memprediksi match selanjutnya.", 4)
+		end
+	end)
+end
+
 -- ===== VISUALS MODULE (FIXED) =====
 local VisualsModule = {}
 
@@ -1194,6 +1247,7 @@ local function MainLoop()
 			SafePcall(KillerModule.DoubleDamageGen)
 			SafePcall(KillerModule.KillerPower)
 			SafePcall(KillerModule.Teleport)
+			SafePcall(KillerModule.PredictNextKiller)
 			
 			-- Visuals
 			SafePcall(VisualsModule.PlayerESPHighlight)
@@ -1225,7 +1279,7 @@ end
 
 -- ===== WINDUI SETUP =====
 local Window = WindUI:CreateWindow({
-	Title = "Violence District Hub v3.1",
+	Title = "Violence District Hub v3.2",
 	Author = "by Jackson Storm",
 	Icon = "solar:gamepad-bold",
 	Theme = Config.Theme,
@@ -1233,6 +1287,17 @@ local Window = WindUI:CreateWindow({
 	Transparent = true,
 	ToggleKey = Enum.KeyCode.F,
 	Acrylic = true,
+	KeySystem = { 
+    Note = "Masukkan key Platoboost Anda untuk melanjutkan.",
+    API = {
+        {   
+            Type = "platoboost", 
+            ServiceId = 26195, 
+            Secret = "8d7de7ed-e9d3-47ab-a6ee-911d31ef4647", 
+        },
+    },
+    SaveKey = true,
+},
 })
 
 -- ===== VIP TAB =====
@@ -1435,6 +1500,15 @@ TabKiller:Toggle({
 	Callback = function(v)
 		Config.Killer.KillerPower = v
 		Notify("Killer Power", v and "✓ Enabled" or "✗ Disabled")
+	end,
+})
+
+TabKiller:Button({
+	Title = "Predict Next Killer",
+	Justify = "Center",
+	Icon = "solar:magic-stick-bold",
+	Callback = function()
+		KillerModule.PredictNextKiller()
 	end,
 })
 
