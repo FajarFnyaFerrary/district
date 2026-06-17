@@ -1,6 +1,7 @@
 --[[
-    Violence District - Ultimate Mod Hub v3.5
-    FIXED: Smart NoClip (Walk through walls, ignore floor) + World Path Highlights
+    Violence District - Ultimate Mod Hub v3.6
+    FIXED: Smart NoClip + FULL World Path Highlights (Generator, Pallet, Gate, Hook, Window)
+    ADDED: Teleport Killer to Survivor (Targeted & Nearest)
     Author: .ftgs | Enhanced by Gemini
 ]]
 
@@ -111,6 +112,7 @@ local Config = {
 local activeESPs = {}
 local activeHighlights = {}
 local isAutoGenRunning = false
+local cachedWorldFolders = {}
 
 -- ===== UTILITY FUNCTIONS =====
 local function SafePcall(func, ...)
@@ -150,9 +152,9 @@ end
 local function GetAllGenerators()
 	local generators = {}
 	pcall(function()
-		local genFolder = FindInstance("Map/Generators")
+		local genFolder = FindInstance("Map/Generators") or FindWorldFolder("Generator")
 		if genFolder then
-			for _, gen in ipairs(genFolder:GetChildren()) do
+			for _, gen in ipairs(genFolder:GetDescendants()) do
 				if gen.Name:match("Generator") or gen:IsA("Model") then
 					table.insert(generators, gen)
 				end
@@ -225,20 +227,23 @@ local function DestroyAllHighlights()
 end
 
 local function ClearWorldHighlightByName(name)
-	for _, obj in ipairs(Workspace:GetDescendants()) do
-		if obj.Name == name then
-			obj:Destroy()
-		end
-	end
+    for i = #activeESPs, 1, -1 do
+        local esp = activeESPs[i]
+        if esp and esp.Name == name then
+            esp:Destroy()
+            table.remove(activeESPs, i)
+        end
+    end
 end
 
 local function DestroyAllESPs()
-	for _, esp in ipairs(activeESPs) do
+	for i = #activeESPs, 1, -1 do
+		local esp = activeESPs[i]
 		if esp and esp.Parent then
 			esp:Destroy()
 		end
+		table.remove(activeESPs, i)
 	end
-	activeESPs = {}
 end
 
 local function Notify(title, content, duration)
@@ -250,12 +255,15 @@ local function Notify(title, content, duration)
 	})
 end
 
-local function GetClosestPlayer(excludeSelf)
+local function GetClosestPlayer(excludeSelf, excludeKillers)
 	local closestPlayer = nil
 	local closestDistance = math.huge
 	
 	for _, player in ipairs(Players:GetPlayers()) do
 		if (not excludeSelf or player ~= LocalPlayer) and player.Character then
+            if excludeKillers and IsPlayerKiller(player) then
+                continue
+            end
 			local root = player.Character:FindFirstChild("HumanoidRootPart")
 			local myRoot = GetHumanoidRootPart()
 			if root and myRoot then
@@ -295,7 +303,6 @@ local NoClipIgnoreParts = {
 RunService.Stepped:Connect(function()
 	if Config.Survivor.NoClip and LocalPlayer.Character then
 		for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
-			-- Mematikan tabrakan untuk seluruh tubuh (termasuk HRP), kecuali bagian kaki
 			if part:IsA("BasePart") and not NoClipIgnoreParts[part.Name] then
 				part.CanCollide = false
 			end
@@ -514,27 +521,80 @@ function VisualsModule.PlayerESPHighlight()
 	end)
 end
 
--- FIX WORLD ESP: Menggunakan Path Exact ("Map/...") agar terdeteksi 100%
+-- FIX WORLD ESP: Menggunakan Fallback Deep Search agar terdeteksi 100% walau struktur map berubah
+local function FindWorldFolder(keyword)
+    local cached = cachedWorldFolders[keyword]
+    if cached and cached.Parent then
+        return cached
+    end
+
+    -- 1. Try exact path first (fastest)
+    local exact = FindInstance("Map/" .. keyword)
+    if exact then 
+        cachedWorldFolders[keyword] = exact
+        return exact 
+    end
+    
+    -- 2. Try alternative common paths
+    local altPaths = {
+        "Map/" .. keyword .. "s",
+        "Map/" .. keyword:sub(1, -2), 
+        keyword,
+        keyword .. "s"
+    }
+    for _, path in ipairs(altPaths) do
+        local found = FindInstance(path)
+        if found then 
+            cachedWorldFolders[keyword] = found
+            return found 
+        end
+    end
+    
+    -- 3. Fallback: Deep search in Workspace for Folder/Model matching keyword
+    for _, descendant in ipairs(Workspace:GetDescendants()) do
+        if (descendant:IsA("Folder") or descendant:IsA("Model")) and descendant.Name:lower():find(keyword:lower()) then
+            cachedWorldFolders[keyword] = descendant
+            return descendant
+        end
+    end
+    return nil
+end
+
 local WorldESPConfigs = {
-	{ stateKey = "GeneratorESP", path = "Map/Generators", name = "GenHighlight", color = Color3.fromRGB(255, 215, 0) },
-	{ stateKey = "PalletESP", path = "Map/Pallets", name = "PalletHighlight", color = Color3.fromRGB(139, 69, 19) },
-	{ stateKey = "ExitGateESP", path = "Map/ExitGates", name = "GateHighlight", color = Color3.fromRGB(0, 255, 255) },
-	{ stateKey = "HookESP", path = "Map/Hooks", name = "HookHighlight", color = Color3.fromRGB(255, 0, 255) },
-	{ stateKey = "WindowESP", path = "Map/Windows", name = "WinHighlight", color = Color3.fromRGB(70, 130, 180) }
+	{ stateKey = "GeneratorESP", keyword = "Generator", name = "GenHighlight", color = Color3.fromRGB(255, 215, 0) },
+	{ stateKey = "PalletESP", keyword = "Pallet", name = "PalletHighlight", color = Color3.fromRGB(139, 69, 19) },
+	{ stateKey = "ExitGateESP", keyword = "ExitGate", name = "GateHighlight", color = Color3.fromRGB(0, 255, 255) },
+	{ stateKey = "HookESP", keyword = "Hook", name = "HookHighlight", color = Color3.fromRGB(255, 0, 255) },
+	{ stateKey = "WindowESP", keyword = "Window", name = "WinHighlight", color = Color3.fromRGB(70, 130, 180) }
 }
 
 task.spawn(function()
 	while true do
-		task.wait(1) -- Memindai setiap 1 detik
+		task.wait(1.5) -- Memindai setiap 1.5 detik
 		pcall(function()
 			for _, cfg in ipairs(WorldESPConfigs) do
 				local isEnabled = Config.Visuals[cfg.stateKey]
-				local folder = FindInstance(cfg.path)
+				local folder = FindWorldFolder(cfg.keyword)
 				
 				if folder then
-					for _, item in ipairs(folder:GetChildren()) do
+                    -- Cari semua Model atau BasePart utama di dalam folder tersebut
+                    local targets = {}
+                    for _, child in ipairs(folder:GetDescendants()) do
+                        if child:IsA("Model") or child:IsA("BasePart") then
+                            -- Pastikan kita hanya mengambil parent tertinggi di dalam folder tersebut untuk menghindari duplikasi highlight
+                            local parent = child
+                            while parent.Parent ~= folder do
+                                parent = parent.Parent
+                            end
+                            if not table.find(targets, parent) then
+                                table.insert(targets, parent)
+                            end
+                        end
+                    end
+                    
+                    for _, item in ipairs(targets) do
 						if isEnabled then
-							if not item:FindFirstChild(cfg.name) and (item:IsA("Model") or item:IsA("BasePart")) then
+							if not item:FindFirstChild(cfg.name) then
 								local hl = Instance.new("Highlight")
 								hl.Name = cfg.name
 								hl.Adornee = item
@@ -670,7 +730,7 @@ end
 
 -- ===== WINDUI SETUP =====
 local Window = WindUI:CreateWindow({
-	Title = "Violence District Hub v3.5",
+	Title = "Violence District Hub v3.6",
 	Author = "by Jackson Storm",
 	Icon = "rbxassetid://91993721465164",
 	Theme = Config.Theme,
@@ -760,6 +820,79 @@ TabKiller:Toggle({
 	Value = Config.Killer.VeinDropPrediction,
 	Callback = function(v) Config.Killer.VeinDropPrediction = v Notify("Vein Drop Prediction", v and "✓ Enabled" or "✗ Disabled") end,
 })
+
+-- === FITUR BARU: TELEPORT KILLER TO SURVIVOR ===
+TabKiller:Section({ Title = "Teleport & Movement" })
+
+local TeleportDropdown = TabKiller:Dropdown({
+	Title = "Target Survivor",
+	Value = "None",
+	Values = {"None"},
+	Callback = function(v) 
+        Config.Killer.TargetPlayer = v 
+    end,
+})
+
+TabKiller:Button({
+	Title = "Refresh Survivor List",
+	Icon = "solar:refresh-circle-bold",
+	Callback = function()
+		local survivors = {"None"}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= LocalPlayer and not IsPlayerKiller(p) then
+				table.insert(survivors, p.Name)
+			end
+		end
+        pcall(function() TeleportDropdown:Refresh(survivors) end)
+        Notify("Refresh", "Daftar survivor diperbarui!", 2)
+	end,
+})
+
+TabKiller:Button({
+	Title = "Teleport to Target",
+	Icon = "solar:arrow-right-bold",
+	Callback = function()
+		local targetName = Config.Killer.TargetPlayer
+		if not targetName or targetName == "None" then
+			Notify("Teleport Error", "Pilih target survivor terlebih dahulu!", 3)
+			return
+		end
+		
+		local target = Players:FindFirstChild(targetName)
+		if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+			local myRoot = GetHumanoidRootPart()
+			if myRoot then
+				local targetPos = target.Character.HumanoidRootPart.Position
+				-- Teleport sedikit di atas agar tidak stuck di dalam karakter
+				myRoot.CFrame = CFrame.new(targetPos + Vector3.new(0, 5, 0))
+				Notify("Teleport", "Berhasil teleport ke " .. targetName, 2)
+			else
+				Notify("Teleport Error", "Karakter kamu tidak ditemukan!", 3)
+			end
+		else
+			Notify("Teleport Error", "Target tidak ditemukan atau sudah keluar!", 3)
+		end
+	end,
+})
+
+TabKiller:Button({
+	Title = "Teleport to Nearest Survivor",
+	Icon = "solar:location-bold",
+	Callback = function()
+		local closest, dist = GetClosestPlayer(true, true) -- exclude self, exclude killers
+		if closest and closest.Character and closest.Character:FindFirstChild("HumanoidRootPart") then
+			local myRoot = GetHumanoidRootPart()
+			if myRoot then
+				local targetPos = closest.Character.HumanoidRootPart.Position
+				myRoot.CFrame = CFrame.new(targetPos + Vector3.new(0, 5, 0))
+				Notify("Teleport", "Berhasil teleport ke survivor terdekat: " .. closest.Name, 2)
+			end
+		else
+			Notify("Teleport Error", "Tidak ada survivor ditemukan!", 3)
+		end
+	end,
+})
+-- =====================================================
 
 -- Tab 4: Visuals
 local TabVisuals = Window:Tab({
@@ -998,4 +1131,4 @@ TabSettings:Button({
 
 -- Run Threads
 task.spawn(MainLoop)
-Notify("Violence District Hub v3.5", "✓ Dimuat! Smart NoClip, ESP Map Asli, & Auto Gen Anti-Ledak Aktif.")
+Notify("Violence District Hub v3.6", "✓ Dimuat! Full World ESP Fixed & Teleport to Survivor Aktif.")
