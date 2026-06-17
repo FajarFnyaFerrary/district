@@ -1,6 +1,7 @@
 --[[
-    Violence District - Ultimate Mod Hub v3.3
-    FIXED: Full World Highlight ESP + Killer Color Detection Fix
+    Violence District - Ultimate Mod Hub v3.4
+    ADDED: Server Monitor with Player Avatar & Role Detection
+    FIXED: Full World Highlight ESP + In-Match Speed Fix + Anti-Explode Auto Gen
     Author: .ftgs | Enhanced by Gemini
 ]]
 
@@ -100,6 +101,9 @@ local Config = {
 		InstantEscape = false,
 		SelfUnhook = false,
 	},
+	Server = {
+		SelectedPlayer = nil,
+	},
 	CameraMode = "FPP",
 	OriginalCameraMode = "FPP",
 }
@@ -120,30 +124,26 @@ local function SafePcall(func, ...)
 end
 
 local function GetCharacter()
-	if LocalPlayer and LocalPlayer.Character then
-		return LocalPlayer.Character
-	end
-	return LocalPlayer.CharacterAdded:Wait()
+	return LocalPlayer and LocalPlayer.Character
 end
 
 local function GetHumanoid()
 	local char = GetCharacter()
-	return char:FindFirstChild("Humanoid") or char:WaitForChild("Humanoid", 5)
+	return char and char:FindFirstChildOfClass("Humanoid")
 end
 
 local function GetHumanoidRootPart()
 	local char = GetCharacter()
-	return char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
+	return char and char:FindFirstChild("HumanoidRootPart")
 end
 
 local function GetAllGenerators()
 	local generators = {}
 	pcall(function()
-		local genFolder = Workspace:FindFirstChild("Generators", true)
-		if genFolder then
-			for _, gen in ipairs(genFolder:GetChildren()) do
-				if gen.Name:match("Generator") or gen:IsA("Model") then
-					table.insert(generators, gen)
+		for _, item in ipairs(Workspace:GetDescendants()) do
+			if item:IsA("Model") or item:IsA("BasePart") then
+				if item.Name:lower():match("generator") and not item:IsA("Player") then
+					table.insert(generators, item)
 				end
 			end
 		end
@@ -151,12 +151,11 @@ local function GetAllGenerators()
 	return generators
 end
 
--- Akurat Cek Role Killer dari Team, Value, Atribut, & Tag Game
+-- Deteksi Role Killer Akurat
 local function IsPlayerKiller(player)
 	if not player then return false end
 	local char = player.Character
 
-	-- 1. Cek Team Roblox
 	if player.Team then
 		local teamName = player.Team.Name:lower()
 		if teamName:match("killer") or teamName:match("beast") or teamName:match("murder") then
@@ -164,7 +163,6 @@ local function IsPlayerKiller(player)
 		end
 	end
 
-	-- 2. Cek Atribut / Values di Player Object
 	if player:GetAttribute("Role") == "Killer" or player:GetAttribute("IsKiller") == true then
 		return true
 	end
@@ -173,7 +171,6 @@ local function IsPlayerKiller(player)
 		return true
 	end
 
-	-- 3. Cek Atribut / Object di Character Model
 	if char then
 		if char:GetAttribute("Role") == "Killer" or char:GetAttribute("IsKiller") == true then
 			return true
@@ -214,6 +211,14 @@ local function DestroyAllHighlights()
 		end
 	end
 	activeHighlights = {}
+end
+
+local function ClearWorldHighlightByName(name)
+	for _, obj in ipairs(Workspace:GetDescendants()) do
+		if obj.Name == name then
+			obj:Destroy()
+		end
+	end
 end
 
 local function DestroyAllESPs()
@@ -262,11 +267,10 @@ function VIPModule.AutoPlay()
 	if not Config.VIP.AutoPlay then return end
 	
 	pcall(function()
-		local char = GetCharacter()
 		local humanoid = GetHumanoid()
 		local rootPart = GetHumanoidRootPart()
 		
-		if humanoid.Health <= 0 then return end
+		if not humanoid or humanoid.Health <= 0 or not rootPart then return end
 		
 		local generators = GetAllGenerators()
 		local nearestGen = nil
@@ -299,11 +303,10 @@ function VIPModule.AutoDagger()
 	if not Config.VIP.AutoDagger then return end
 	
 	pcall(function()
-		local char = GetCharacter()
 		local rootPart = GetHumanoidRootPart()
 		local humanoid = GetHumanoid()
 		
-		if humanoid.Health <= 0 then return end
+		if not humanoid or humanoid.Health <= 0 or not rootPart then return end
 		
 		local closestPlayer = GetClosestPlayer(true)
 		if closestPlayer and closestPlayer.Character then
@@ -323,36 +326,28 @@ end
 -- ===== SURVIVOR MODULE =====
 local SurvivorModule = {}
 
-function SurvivorModule.SpeedBoost()
-	if not Config.Survivor.SpeedBoost then return end
-	
-	pcall(function()
-		local humanoid = GetHumanoid()
-		if humanoid and humanoid.Health > 0 then
-			humanoid.WalkSpeed = Config.Survivor.CustomSpeed
+-- Bypass Anti-Reset Speed Match dengan Heartbeat Loop Terkoneksi
+RunService.Heartbeat:Connect(function()
+	if LocalPlayer and LocalPlayer.Character then
+		if Config.Survivor.SpeedBoost or Config.Survivor.NoSlowdown then
+			local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				humanoid.WalkSpeed = Config.Survivor.CustomSpeed
+			end
 		end
-	end)
-end
-
-function SurvivorModule.NoSlowdown()
-	if not Config.Survivor.NoSlowdown then return end
-	
-	pcall(function()
-		local humanoid = GetHumanoid()
-		if humanoid then
-			humanoid.WalkSpeed = Config.Survivor.CustomSpeed
-		end
-	end)
-end
+	end
+end)
 
 function SurvivorModule.NoClip()
 	if not Config.Survivor.NoClip then return end
 	
 	pcall(function()
 		local char = GetCharacter()
-		for _, part in ipairs(char:GetDescendants()) do
-			if part:IsA("BasePart") then
-				part.CanCollide = false
+		if char then
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.CanCollide = false
+				end
 			end
 		end
 	end)
@@ -365,13 +360,15 @@ function SurvivorModule.ForceReset()
 		local humanoid = GetHumanoid()
 		local rootPart = GetHumanoidRootPart()
 		
-		humanoid.Sit = false
-		humanoid:UnequipTools()
-		rootPart.Velocity = Vector3.new(0, 0, 0)
-		
-		local resetRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("ResetState")
-		if resetRemote then
-			resetRemote:FireServer()
+		if humanoid and rootPart then
+			humanoid.Sit = false
+			humanoid:UnequipTools()
+			rootPart.Velocity = Vector3.new(0, 0, 0)
+			
+			local resetRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("ResetState")
+			if resetRemote then
+				resetRemote:FireServer()
+			end
 		end
 	end)
 end
@@ -381,9 +378,11 @@ function SurvivorModule.SilentActions()
 	
 	pcall(function()
 		local char = GetCharacter()
-		for _, child in ipairs(char:GetChildren()) do
-			if child:IsA("Sound") then
-				child.Volume = 0
+		if char then
+			for _, child in ipairs(char:GetChildren()) do
+				if child:IsA("Sound") then
+					child.Volume = 0
+				end
 			end
 		end
 	end)
@@ -407,8 +406,8 @@ function KillerModule.VeinDropPrediction()
 	if not Config.Killer.VeinDropPrediction then return end
 	
 	pcall(function()
-		local char = GetCharacter()
 		local rootPart = GetHumanoidRootPart()
+		if not rootPart then return end
 		
 		local closestPlayer, distance = GetClosestPlayer(true)
 		if closestPlayer and closestPlayer.Character and distance < 100 then
@@ -470,7 +469,7 @@ function KillerModule.PredictNextKiller()
 	end)
 end
 
--- ===== VISUALS MODULE (FULLY CONVERTED TO HIGHLIGHT TYPES) =====
+-- ===== VISUALS MODULE =====
 local VisualsModule = {}
 
 function VisualsModule.PlayerESPHighlight()
@@ -490,7 +489,6 @@ function VisualsModule.PlayerESPHighlight()
 				if not existingHighlight then
 					CreateHighlightBox(char, targetColor, "PlayerHighlight")
 				else
-					-- Fix Real-time Color Update: Jika berubah role, ganti warna langsung agar tidak macet hijau
 					if existingHighlight.FillColor ~= targetColor then
 						existingHighlight.FillColor = targetColor
 					end
@@ -500,60 +498,104 @@ function VisualsModule.PlayerESPHighlight()
 	end)
 end
 
--- Handler Baru: Full World Highlight ESP
-local function HandleWorldHighlightESP(configState, folderName, highlightName, color)
-	if not configState then
-		for _, obj in ipairs(Workspace:GetDescendants()) do
-			if obj.Name == highlightName then
-				obj:Destroy()
+-- Background Deep-Scanner untuk World Highlights ESP (Anti Lag & Deteksi Akurat)
+task.spawn(function()
+	while true do
+		task.wait(1.5) -- Scan berkala yang aman dari drop FPS
+		pcall(function()
+			if not (Config.Visuals.GeneratorESP or Config.Visuals.PalletESP or Config.Visuals.ExitGateESP or Config.Visuals.HookESP or Config.Visuals.WindowESP) then
+				return
 			end
-		end
-		return
-	end
-	
-	pcall(function()
-		local folder = Workspace:FindFirstChild(folderName, true)
-		if folder then
-			for _, item in ipairs(folder:GetChildren()) do
-				if item and (item:IsA("Model") or item:IsA("BasePart")) then
-					local existingHighlight = item:FindFirstChild(highlightName)
-					if not existingHighlight then
-						local hl = Instance.new("Highlight")
-						hl.Name = highlightName
-						hl.Adornee = item
-						hl.FillColor = color
-						hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-						hl.FillTransparency = 0.5
-						hl.OutlineTransparency = 0.2
-						hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-						hl.Parent = item
-						table.insert(activeESPs, hl)
+
+			for _, item in ipairs(Workspace:GetDescendants()) do
+				if item:IsA("Model") or item:IsA("BasePart") then
+					local nameLower = item.Name:lower()
+					
+					-- 1. Generator Highlight
+					if Config.Visuals.GeneratorESP and (nameLower:match("generator") or (item.Parent and item.Parent.Name:lower():match("generator"))) then
+						if not item:FindFirstChild("GenHighlight") and not item:IsA("Player") and not item:FindFirstChildOfClass("Humanoid") then
+							local hl = Instance.new("Highlight")
+							hl.Name = "GenHighlight"
+							hl.Adornee = item
+							hl.FillColor = Color3.fromRGB(255, 215, 0)
+							hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+							hl.FillTransparency = 0.5
+							hl.OutlineTransparency = 0.2
+							hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+							hl.Parent = item
+							table.insert(activeESPs, hl)
+						end
 					end
+
+					-- 2. Pallet Highlight
+					if Config.Visuals.PalletESP and (nameLower:match("pallet") or (item.Parent and item.Parent.Name:lower():match("pallet"))) then
+						if not item:FindFirstChild("PalletHighlight") then
+							local hl = Instance.new("Highlight")
+							hl.Name = "PalletHighlight"
+							hl.Adornee = item
+							hl.FillColor = Color3.fromRGB(139, 69, 19)
+							hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+							hl.FillTransparency = 0.5
+							hl.OutlineTransparency = 0.2
+							hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+							hl.Parent = item
+							table.insert(activeESPs, hl)
+						end
+					end
+
+					-- 3. Exit Gate Highlight
+					if Config.Visuals.ExitGateESP and (nameLower:match("exit") or nameLower:match("gate") or (item.Parent and item.Parent.Name:lower():match("exit"))) then
+						if not item:FindFirstChild("GateHighlight") then
+							local hl = Instance.new("Highlight")
+							hl.Name = "GateHighlight"
+							hl.Adornee = item
+							hl.FillColor = Color3.fromRGB(0, 255, 255)
+							hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+							hl.FillTransparency = 0.5
+							hl.OutlineTransparency = 0.2
+							hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+							hl.Parent = item
+							table.insert(activeESPs, hl)
+						end
+					end
+
+					-- 4. Hook Highlight
+					if Config.Visuals.HookESP and (nameLower:match("hook") or (item.Parent and item.Parent.Name:lower():match("hook"))) then
+						if not item:FindFirstChild("HookHighlight") then
+							local hl = Instance.new("Highlight")
+							hl.Name = "HookHighlight"
+							hl.Adornee = item
+							hl.FillColor = Color3.fromRGB(255, 0, 255)
+							hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+							hl.FillTransparency = 0.5
+							hl.OutlineTransparency = 0.2
+							hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+							hl.Parent = item
+							table.insert(activeESPs, hl)
+						end
+					end
+
+					-- 5. Window / Vault Highlight
+					if Config.Visuals.WindowESP and (nameLower:match("window") or nameLower:match("vault") or (item.Parent and item.Parent.Name:lower():match("window"))) then
+						if not item:FindFirstChild("WinHighlight") then
+							local hl = Instance.new("Highlight")
+							hl.Name = "WinHighlight"
+							hl.Adornee = item
+							hl.FillColor = Color3.fromRGB(70, 130, 180)
+							hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+							hl.FillTransparency = 0.5
+							hl.OutlineTransparency = 0.2
+							hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+							hl.Parent = item
+							table.insert(activeESPs, hl)
+						end
+					end
+
 				end
 			end
-		end
-	end)
-end
-
-function VisualsModule.GeneratorESP()
-	HandleWorldHighlightESP(Config.Visuals.GeneratorESP, "Generators", "GenHighlight", Color3.fromRGB(255, 215, 0))
-end
-
-function VisualsModule.PalletESP()
-	HandleWorldHighlightESP(Config.Visuals.PalletESP, "Pallets", "PalletHighlight", Color3.fromRGB(139, 69, 19))
-end
-
-function VisualsModule.ExitGateESP()
-	HandleWorldHighlightESP(Config.Visuals.ExitGateESP, "ExitGates", "GateHighlight", Color3.fromRGB(0, 255, 255))
-end
-
-function VisualsModule.HookESP()
-	HandleWorldHighlightESP(Config.Visuals.HookESP, "Hooks", "HookHighlight", Color3.fromRGB(255, 0, 255))
-end
-
-function VisualsModule.WindowESP()
-	HandleWorldHighlightESP(Config.Visuals.WindowESP, "Windows", "WinHighlight", Color3.fromRGB(70, 130, 180))
-end
+		end)
+	end
+end)
 
 function VisualsModule.CustomFOV()
 	if not Config.Visuals.CustomFOV then
@@ -608,13 +650,27 @@ function AutomationModule.AutoGenerator()
 		for _, gen in ipairs(generators) do
 			if not Config.Automation.AutoGenerator then break end
 			local genPoint = gen:FindFirstChild("GeneratorPoint2") or gen
-			local repairEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Generator"):WaitForChild("RepairEvent")
-			repairEvent:FireServer(genPoint, true)
-			task.wait(0.3)
-			local skillCheckEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Generator"):WaitForChild("SkillCheckResultEvent")
-			local mode = Config.Automation.GeneratorMode == "Perfect" and "perfect" or "neutral"
-			skillCheckEvent:FireServer(mode, 0, gen, genPoint)
-			task.wait(0.5)
+			local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+			local genRemotes = remotes and remotes:FindFirstChild("Generator")
+			
+			if genRemotes then
+				local repairEvent = genRemotes:FindFirstChild("RepairEvent")
+				local skillCheckEvent = genRemotes:FindFirstChild("SkillCheckResultEvent") or genRemotes:FindFirstChild("SkillCheckEvent")
+				
+				if repairEvent then
+					repairEvent:FireServer(genPoint, true)
+				end
+				
+				task.wait(0.1) 
+				
+				if skillCheckEvent then
+					local mode = Config.Automation.GeneratorMode == "Perfect" and "perfect" or "neutral"
+					skillCheckEvent:FireServer(mode, true, gen, genPoint)
+					skillCheckEvent:FireServer(mode, 0, gen, genPoint)
+					skillCheckEvent:FireServer(true, gen, genPoint)
+				end
+			end
+			task.wait(0.2)
 		end
 	end)
 	isAutoGenRunning = false
@@ -629,22 +685,15 @@ local function MainLoop()
 			SafePcall(VIPModule.AutoPlay)
 			SafePcall(VIPModule.AutoDagger)
 			
-			-- Survivor
-			SafePcall(SurvivorModule.SpeedBoost)
-			SafePcall(SurvivorModule.NoSlowdown)
+			-- Survivor Exploit
 			SafePcall(SurvivorModule.NoClip)
 			SafePcall(SurvivorModule.AntiFallDamage)
 			
 			-- Killer
 			SafePcall(KillerModule.VeinDropPrediction)
 			
-			-- Visuals (Sistem Real-Time Refresh)
+			-- Visuals Real-time Updates
 			SafePcall(VisualsModule.PlayerESPHighlight)
-			SafePcall(VisualsModule.GeneratorESP)
-			SafePcall(VisualsModule.PalletESP)
-			SafePcall(VisualsModule.ExitGateESP)
-			SafePcall(VisualsModule.HookESP)
-			SafePcall(VisualsModule.WindowESP)
 			SafePcall(VisualsModule.CustomFOV)
 			
 			-- Automation
@@ -653,9 +702,9 @@ local function MainLoop()
 	end
 end
 
--- ===== WINDUI SETUP (SOLAR ICONS FORMAT ONLY) =====
+-- ===== WINDUI SETUP =====
 local Window = WindUI:CreateWindow({
-	Title = "Violence District Hub v3.3",
+	Title = "Violence District Hub v3.4",
 	Author = "by Jackson Storm",
 	Icon = "rbxassetid://91993721465164",
 	Theme = Config.Theme,
@@ -765,27 +814,42 @@ TabVisuals:Toggle({
 TabVisuals:Toggle({
 	Title = "Generator ESP (Highlight)",
 	Value = Config.Visuals.GeneratorESP,
-	Callback = function(v) Config.Visuals.GeneratorESP = v VisualsModule.GeneratorESP() end,
+	Callback = function(v) 
+		Config.Visuals.GeneratorESP = v 
+		if not v then ClearWorldHighlightByName("GenHighlight") end
+	end,
 })
 TabVisuals:Toggle({
 	Title = "Pallet ESP (Highlight)",
 	Value = Config.Visuals.PalletESP,
-	Callback = function(v) Config.Visuals.PalletESP = v VisualsModule.PalletESP() end,
+	Callback = function(v) 
+		Config.Visuals.PalletESP = v 
+		if not v then ClearWorldHighlightByName("PalletHighlight") end
+	end,
 })
 TabVisuals:Toggle({
 	Title = "Exit Gate ESP (Highlight)",
 	Value = Config.Visuals.ExitGateESP,
-	Callback = function(v) Config.Visuals.ExitGateESP = v VisualsModule.ExitGateESP() end,
+	Callback = function(v) 
+		Config.Visuals.ExitGateESP = v 
+		if not v then ClearWorldHighlightByName("GateHighlight") end
+	end,
 })
 TabVisuals:Toggle({
 	Title = "Hook ESP (Highlight)",
 	Value = Config.Visuals.HookESP,
-	Callback = function(v) Config.Visuals.HookESP = v VisualsModule.HookESP() end,
+	Callback = function(v) 
+		Config.Visuals.HookESP = v 
+		if not v then ClearWorldHighlightByName("HookHighlight") end
+	end,
 })
 TabVisuals:Toggle({
 	Title = "Window ESP (Highlight)",
 	Value = Config.Visuals.WindowESP,
-	Callback = function(v) Config.Visuals.WindowESP = v VisualsModule.WindowESP() end,
+	Callback = function(v) 
+		Config.Visuals.WindowESP = v 
+		if not v then ClearWorldHighlightByName("WinHighlight") end
+	end,
 })
 
 TabVisuals:Section({ Title = "Display & Screen" })
@@ -838,7 +902,98 @@ TabAuto:Dropdown({
 	Callback = function(v) Config.Automation.GeneratorMode = v Notify("Mode Set", v) end,
 })
 
--- Tab 7: Settings
+-- Tab 7: Server (NEW FEATURE)
+local TabServer = Window:Tab({
+	Title = "SERVER",
+	Icon = "mdi:server",
+})
+
+TabServer:Section({ Title = "Live Player Monitor", Desc = "Cek Role dan Profile Avatar Player" })
+
+local function GetPlayerNames()
+	local list = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		table.insert(list, p.Name)
+	end
+	return list
+end
+
+local PlayerDropdown = TabServer:Dropdown({
+	Title = "Select Player",
+	Value = GetPlayerNames()[1] or "None",
+	Values = GetPlayerNames(),
+	Callback = function(v) 
+		Config.Server.SelectedPlayer = v 
+	end,
+})
+
+TabServer:Button({
+	Title = "Refresh Player List",
+	Icon = "solar:refresh-circle-bold",
+	Callback = function()
+		pcall(function() PlayerDropdown:Refresh(GetPlayerNames()) end)
+		Notify("Server Monitor", "Daftar player berhasil diperbarui!", 3)
+	end,
+})
+
+TabServer:Button({
+	Title = "Inspect Selected Player",
+	Desc = "Menampilkan Avatar & Status Role",
+	Icon = "solar:user-id-bold",
+	Callback = function()
+		local targetName = Config.Server.SelectedPlayer
+		if not targetName or targetName == "None" then
+			Notify("Error", "Pilih player terlebih dahulu dari dropdown!", 3)
+			return
+		end
+		
+		local target = Players:FindFirstChild(targetName)
+		if target then
+			local isKiller = IsPlayerKiller(target)
+			local roleName = isKiller and "KILLER 🔪" or "SURVIVOR 🏃"
+			
+			-- Fetch Roblox Avatar PFP
+			local avatarUrl = ""
+			pcall(function()
+				avatarUrl = Players:GetUserThumbnailAsync(target.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+			end)
+			
+			-- Cek Health Status
+			local hp = "Mati / Lobby"
+			if target.Character and target.Character:FindFirstChild("Humanoid") then
+				local hum = target.Character.Humanoid
+				if hum.Health > 0 then
+					hp = math.floor(hum.Health) .. " / " .. math.floor(hum.MaxHealth)
+				end
+			end
+			
+			WindUI:Notify({
+				Title = "Monitor: " .. target.Name,
+				Content = "Role Saat Ini: " .. roleName .. "\nStatus HP: " .. hp,
+				Duration = 6,
+				Image = avatarUrl ~= "" and avatarUrl or nil
+			})
+		else
+			Notify("Monitor Error", "Player " .. targetName .. " tidak ditemukan (Mungkin sudah keluar).", 4)
+		end
+	end,
+})
+
+TabServer:Section({ Title = "Server Info" })
+TabServer:Button({
+	Title = "Check Server Statistics",
+	Icon = "solar:users-group-rounded-bold",
+	Callback = function()
+		local total = #Players:GetPlayers()
+		local killers = 0
+		for _, p in ipairs(Players:GetPlayers()) do
+			if IsPlayerKiller(p) then killers = killers + 1 end
+		end
+		Notify("Server Analytics", "Total Pemain Aktif: " .. total .. "\nJumlah Killer Terdeteksi: " .. killers, 5)
+	end,
+})
+
+-- Tab 8: Settings
 local TabSettings = Window:Tab({
 	Title = "Settings",
 	Icon = "solar:settings-bold",
@@ -877,6 +1032,6 @@ TabSettings:Button({
 	end,
 })
 
--- Run Thread
+-- Run Threads
 task.spawn(MainLoop)
-Notify("Violence District Hub v3.3", "✓ Berhasil Dimuat! Full World Highlight & Perbaikan Warna Killer Aktif.")
+Notify("Violence District Hub v3.4", "✓ Berhasil Dimuat! Fitur Monitor Server kini tersedia.")
