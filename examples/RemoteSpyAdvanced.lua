@@ -670,8 +670,6 @@ local Window = WindUI:CreateWindow({
 	},
 })
 
--- tab developer
-
 -- Tab 1: VIP
 local TabVIP = Window:Tab({ Title = "VIP", Icon = "solar:crown-bold" })
 TabVIP:Section({ Title = "Automatic Features" })
