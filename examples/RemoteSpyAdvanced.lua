@@ -1,10 +1,9 @@
 --[[
-    Violence District - Ultimate Mod Hub v3.8
-    FIXED: Auto Gen Anti-Desync (No Stuck) + Smart NoClip + World Path Highlights
-    FIXED: Auto Generator Evasion Bug (Bisa langsung lari tanpa kena teleport balik)
-    FIXED: Akurasi Progres Skillcheck Generator 100% Sinkron Server
-    ADDED: Force Become Killer Loop Toggle (Bypass DisableKillerChange via changeoption)
-    Author: .ftgs | Enhanced by Gemini & User
+    Violence District - Ultimate Mod Hub v4.0
+    FIXED: Auto Gen Slot Flickering Bug (Persistent Single-Target Lock)
+    FIXED: Auto Generator Evasion Bug
+    ADDED: Explicit Unlock/Lock Server Buttons for Killer Change Control
+    Author: .ftgs | Enhanced by Gemini & Fajar
 ]]
 
 local cloneref = (cloneref or clonereference or function(instance)
@@ -68,7 +67,7 @@ local Config = {
 		Teleport = false,
 		TargetPlayer = nil,
 		ForceKillerTarget = "Self",
-		ForceKillerEnabled = false, -- Status Kendali Jarak Jauh On/Off
+		ForceKillerEnabled = false,
 	},
 	Visuals = {
 		PlayerESP = false,
@@ -117,6 +116,7 @@ local activeESPs = {}
 local activeHighlights = {}
 local isAutoGenRunning = false
 local cachedWorldFolders = {}
+local currentGenerator = nil
 
 -- ===== UTILITY FUNCTIONS =====
 local function SafePcall(func, ...)
@@ -167,9 +167,8 @@ local function GetAllGenerators()
 	return generators
 end
 
--- Mengukur akurasi progres generator di sisi server agar tidak tumpang tindih
 local function IsGeneratorDone(gen)
-	if not gen then return true end
+	if not gen or not gen.Parent then return true end
 	local progress = gen:GetAttribute("Progress") or gen:GetAttribute("RepairProgress") or gen:GetAttribute("Health")
 	if progress and progress >= 100 then return true end
 	local val = gen:FindFirstChild("Progress") or gen:FindFirstChild("Health") or gen:FindFirstChild("Repair")
@@ -355,6 +354,28 @@ function KillerModule.PredictNextKiller()
 	end)
 end
 
+function KillerModule.SetKillerChangeState(allow)
+	pcall(function()
+		local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+		if not remotes then return end
+		local optionsFolder = remotes:FindFirstChild("Options")
+		if optionsFolder then
+			local changeoption = optionsFolder:FindFirstChild("changeoption")
+			if changeoption and changeoption:IsA("RemoteEvent") then
+				if allow then
+					changeoption:FireServer("DisableKillerChange", false)
+					changeoption:FireServer("AllowKiller", true)
+					Notify("Server Exploit", "🔓 Server diizinkan mengganti Role Killer!", 3)
+				else
+					changeoption:FireServer("DisableKillerChange", true)
+					changeoption:FireServer("AllowKiller", false)
+					Notify("Server Exploit", "🔒 Pergantian Killer dikunci paksa oleh server!", 3)
+				end
+			end
+		end
+	end)
+end
+
 function KillerModule.ForceBecomeKiller(isLoopMode)
 	pcall(function()
 		local targetName = Config.Killer.ForceKillerTarget
@@ -368,20 +389,6 @@ function KillerModule.ForceBecomeKiller(isLoopMode)
 		local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 		if not remotes then return end
 
-		-- 1. BYPASS DISABLE KILLER CHANGE (Paksa Ubah Nilai Server)
-		local optionsFolder = remotes:FindFirstChild("Options")
-		if optionsFolder then
-			local changeoption = optionsFolder:FindFirstChild("changeoption")
-			if changeoption and changeoption:IsA("RemoteEvent") then
-				-- Memaksa DisableKillerChange / AllowKiller bernilai false ke server secara simultan
-				changeoption:FireServer("AllowKiller", false)
-				changeoption:FireServer("DisableKillerChange", false)
-				if not isLoopMode then task.wait(0.05) end
-				changeoption:FireServer("AllowKiller", true)
-			end
-		end
-
-		-- 2. INJECT KILLER ROLE INTO TARGET
 		local roleRemotes = {"SetRole", "UpdateRole", "BecomeKiller", "ForceRole", "SelectKiller", "AdminSetRole", "ChangeRole"}
 		for _, rName in ipairs(roleRemotes) do
 			local r = remotes:FindFirstChild(rName, true)
@@ -393,7 +400,6 @@ function KillerModule.ForceBecomeKiller(isLoopMode)
 			end
 		end
 
-		-- 3. SPAM CHANCE FALLBACK
 		local addChance = remotes:FindFirstChild("AddChance", true) or remotes:FindFirstChild("BuyChance", true)
 		if addChance and addChance:IsA("RemoteEvent") then
 			addChance:FireServer(targetPlayer, 999)
@@ -401,7 +407,7 @@ function KillerModule.ForceBecomeKiller(isLoopMode)
 		end
 
 		if not isLoopMode then
-			Notify("Force Role Executed", "Sukses merubah " .. targetPlayer.Name .. " menjadi Killer!", 4)
+			Notify("Force Role Executed", "Injeksi peran Killer dikirim untuk: " .. targetPlayer.Name, 4)
 		end
 	end)
 end
@@ -531,72 +537,93 @@ function VisualsModule.Crosshair()
 	end
 end
 
--- ===== AUTOMATION (ANTI-TELEPORT & 100% SINKRONISASI SERVER) =====
+-- ===== AUTOMATION (FIXED TARGET LOCK & NO FLICKER) =====
 local AutomationModule = {}
 function AutomationModule.AutoGenerator()
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	local genRemotes = remotes and remotes:FindFirstChild("Generator")
+	
 	if not Config.Automation.AutoGenerator then
+		if currentGenerator then
+			pcall(function()
+				if genRemotes then
+					local stopRepair = genRemotes:FindFirstChild("StopRepair") or genRemotes:FindFirstChild("CancelRepair")
+					local repairEvent = genRemotes:FindFirstChild("RepairEvent")
+					local genPoint = currentGenerator:FindFirstChild("GeneratorPoint2") or currentGenerator
+					if repairEvent then repairEvent:FireServer(genPoint, false) end
+					if stopRepair then stopRepair:FireServer(genPoint) end
+				end
+			end)
+			currentGenerator = nil
+		end
 		isAutoGenRunning = false
 		return
 	end
 	if isAutoGenRunning then return end
 
-	-- DETEKSI EVASION / KABUR (Solusi Bug Teleportasi Saat Lari Dari Killer)
 	local humanoid = GetHumanoid()
 	if humanoid and humanoid.MoveDirection.Magnitude > 0 then
 		pcall(function()
-			local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-			local genRemotes = remotes and remotes:FindFirstChild("Generator")
-			if genRemotes then
+			if currentGenerator and genRemotes then
 				local stopRepair = genRemotes:FindFirstChild("StopRepair") or genRemotes:FindFirstChild("CancelRepair")
 				local repairEvent = genRemotes:FindFirstChild("RepairEvent")
-				for _, gen in ipairs(GetAllGenerators()) do
-					local genPoint = gen:FindFirstChild("GeneratorPoint2") or gen
-					if repairEvent then repairEvent:FireServer(genPoint, false) end
-					if stopRepair then stopRepair:FireServer(genPoint) end
-				end
+				local genPoint = currentGenerator:FindFirstChild("GeneratorPoint2") or currentGenerator
+				if repairEvent then repairEvent:FireServer(genPoint, false) end
+				if stopRepair then stopRepair:FireServer(genPoint) end
 			end
+			currentGenerator = nil
 			local hrp = GetHumanoidRootPart()
 			if hrp and hrp.Anchored then hrp.Anchored = false end
 		end)
-		return -- Keluar dari fungsi agar tidak terseret/teleport balik ke generator
+		return
 	end
 
 	isAutoGenRunning = true
 	pcall(function()
-		local generators = GetAllGenerators()
-		local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-		local genRemotes = remotes and remotes:FindFirstChild("Generator")
-
 		if genRemotes then
 			local repairEvent = genRemotes:FindFirstChild("RepairEvent")
 			local stopRepair = genRemotes:FindFirstChild("StopRepair") or genRemotes:FindFirstChild("CancelRepair")
 			local skillCheckEvent = genRemotes:FindFirstChild("SkillCheckResultEvent") or genRemotes:FindFirstChild("SkillCheckEvent")
 
-			for _, gen in ipairs(generators) do
-				-- Saring generator yang sudah selesai agar progress akurat 100%
-				if IsGeneratorDone(gen) then continue end
-				if not Config.Automation.AutoGenerator then break end
-
-				-- Validasi ulang pergerakan di dalam sela loop mikro
-				local loopHum = GetHumanoid()
-				if loopHum and loopHum.MoveDirection.Magnitude > 0 then break end
-
-				local genPoint = gen:FindFirstChild("GeneratorPoint2") or gen
-
-				if repairEvent then repairEvent:FireServer(genPoint, true) end
-				task.wait(0.05) 
-
-				if skillCheckEvent then
-					local mode = Config.Automation.GeneratorMode == "Perfect" and "perfect" or "neutral"
-					-- Payload injeksi % data sukses agar server mencatat keselarasan data progress asli
-					skillCheckEvent:FireServer(mode, true, gen, genPoint)
-					skillCheckEvent:FireServer(mode, 100, gen, genPoint) 
-					skillCheckEvent:FireServer(true, gen, genPoint)
-				end
-				task.wait(0.05)
-
+			if currentGenerator and IsGeneratorDone(currentGenerator) then
+				local genPoint = currentGenerator:FindFirstChild("GeneratorPoint2") or currentGenerator
 				if repairEvent then repairEvent:FireServer(genPoint, false) end
 				if stopRepair then stopRepair:FireServer(genPoint) end
+				currentGenerator = nil
+			end
+
+			if not currentGenerator then
+				local generators = GetAllGenerators()
+				local hrp = GetHumanoidRootPart()
+				if hrp then
+					local closestGen = nil
+					local minDistance = math.huge
+					for _, gen in ipairs(generators) do
+						if not IsGeneratorDone(gen) then
+							local genPoint = gen:FindFirstChild("GeneratorPoint2") or gen
+							local genPos = genPoint:IsA("BasePart") and genPoint.Position or gen:GetPivot().Position
+							local dist = (hrp.Position - genPos).Magnitude
+							if dist < minDistance then
+								minDistance = dist
+								closestGen = gen
+							end
+						end
+					end
+					currentGenerator = closestGen
+				end
+			end
+
+			if currentGenerator then
+				local genPoint = currentGenerator:FindFirstChild("GeneratorPoint2") or currentGenerator
+				if repairEvent then repairEvent:FireServer(genPoint, true) end
+				task.wait(0.05) 
+				if skillCheckEvent then
+					local mode = Config.Automation.GeneratorMode == "Perfect" and "perfect" or "neutral"
+					skillCheckEvent:FireServer(mode, true, currentGenerator, genPoint)
+					skillCheckEvent:FireServer(mode, 100, currentGenerator, genPoint) 
+					skillCheckEvent:FireServer(true, currentGenerator, genPoint)
+				end
+				task.wait(0.05)
 			end
 		end
 	end)
@@ -628,7 +655,7 @@ end
 
 -- ===== WINDUI SETUP =====
 local Window = WindUI:CreateWindow({
-	Title = "Violence District Hub v3.8",
+	Title = "Violence District Hub v4.0",
 	Author = "by Jackson Storm",
 	Icon = "rbxassetid://91993721465164",
 	Theme = Config.Theme,
@@ -662,7 +689,6 @@ local TabKiller = Window:Tab({ Title = "KILLER", Icon = "solar:shield-minimalist
 TabKiller:Section({ Title = "Predictions & Intel" })
 TabKiller:Button({ Title = "Predict Next Killer", Justify = "Center", Icon = "solar:magic-stick-bold", Callback = function() KillerModule.PredictNextKiller() end })
 
--- TAB KILLER UPDATED: KENDALI JARAK JAUH / ON-OFF TOGGLE
 TabKiller:Section({ Title = "Role Exploits (Force Server)" })
 local ForceKillerDropdown
 local function RefreshKillerDropdown()
@@ -678,6 +704,26 @@ ForceKillerDropdown = TabKiller:Dropdown({
 	Value = "Self",
 	Values = RefreshKillerDropdown(),
 	Callback = function(v) Config.Killer.ForceKillerTarget = v end,
+})
+
+TabKiller:Button({
+	Title = "🔓 Unlock Server (Enable Killer Change)",
+	Desc = "Mengizinkan pergantian role killer di server",
+	Icon = "solar:unlock-bold",
+	Callback = function() KillerModule.SetKillerChangeState(true) end,
+})
+
+TabKiller:Button({
+	Title = "🔒 Lock Server (Disable Killer Change)",
+	Desc = "Mengunci role killer agar tidak bisa diganti server",
+	Icon = "solar:lock-password-bold",
+	Callback = function() KillerModule.SetKillerChangeState(false) end,
+})
+
+TabKiller:Button({
+	Title = "Force Become Killer (Instant Execute)",
+	Icon = "solar:danger-triangle-bold",
+	Callback = function() KillerModule.ForceBecomeKiller(false) end,
 })
 
 TabKiller:Toggle({
@@ -697,12 +743,6 @@ TabKiller:Toggle({
 			Notify("Force Killer Loop", "Looping dihentikan.", 2)
 		end
 	end
-})
-
-TabKiller:Button({
-	Title = "Force Become Killer (Instant Execute)",
-	Icon = "solar:danger-triangle-bold",
-	Callback = function() KillerModule.ForceBecomeKiller(false) end,
 })
 
 TabKiller:Button({
@@ -759,7 +799,7 @@ TabVisuals:Slider({ Title = "FOV Value", Step = 5, Value = { Min = 40, Max = 120
 -- Tab 5: Automation
 local TabAuto = Window:Tab({ Title = "AUTOMATION", Icon = "solar:play-bold" })
 TabAuto:Section({ Title = "Generator Setup" })
-TabAuto:Toggle({ Title = "Auto Generator (Anti Stuck)", Value = Config.Automation.AutoGenerator, Callback = function(v) Config.Automation.AutoGenerator = v end })
+TabAuto:Toggle({ Title = "Auto Generator (Anti Stuck & Target Lock)", Value = Config.Automation.AutoGenerator, Callback = function(v) Config.Automation.AutoGenerator = v end })
 TabAuto:Dropdown({ Title = "Generator Mode", Value = Config.Automation.GeneratorMode, Values = {"Perfect", "Neutral"}, Callback = function(v) Config.Automation.GeneratorMode = v end })
 
 -- Tab 6: Server Monitor
@@ -805,4 +845,4 @@ TabSettings:Button({
 
 -- Run Threads
 task.spawn(MainLoop)
-Notify("Violence District Hub v3.8", "✓ Berhasil Update! Bug Auto-Gen & Fitur Jarak Jauh Killer Siap Pakai.")
+Notify("Violence District Hub v4.0", "✓ Memuat sukses! Tombol Manual Server Control telah diaktifkan.")
